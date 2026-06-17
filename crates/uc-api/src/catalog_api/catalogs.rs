@@ -1,13 +1,12 @@
 use axum::{
     extract::{Path, Query, State},
     http::StatusCode,
-    response::IntoResponse,
     Extension, Json,
 };
 use std::sync::Arc;
 use uc_auth::UcClaims;
 use uc_db::repos::{CatalogRepo, PropertyRepo, UserRepo};
-use uc_errors::{ErrorCode, UcError};
+use uc_errors::UcError;
 use uc_openapi::catalog::{CatalogInfo, CreateCatalog, ListCatalogsResponse, UpdateCatalog};
 use uc_types::Privilege;
 use uuid::Uuid;

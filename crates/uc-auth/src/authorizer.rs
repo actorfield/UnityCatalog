@@ -1,4 +1,4 @@
-use casbin::{CoreApi, Enforcer, MgmtApi, RbacApi};
+use casbin::{CoreApi, Enforcer, MgmtApi};
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use uc_errors::{ErrorCode, UcError};

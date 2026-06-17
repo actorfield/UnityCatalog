@@ -1,4 +1,3 @@
-use crate::IntoUcResult;
 use crate::{models::staging::StagingTableRow, pool::AnyPool};
 use uc_errors::UcError;
 use uuid::Uuid;

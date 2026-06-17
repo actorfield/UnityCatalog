@@ -13,7 +13,7 @@ pub mod temp_credentials;
 pub mod staging_tables;
 pub mod delta_commits;
 
-use axum::{middleware, routing::{delete, get, patch, post}, Router};
+use axum::{middleware, routing::{get, patch, post}, Router};
 use crate::{error_ext::inject_catalog_format, state::AppState};
 
 pub fn router(state: AppState) -> Router {

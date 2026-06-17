@@ -1,4 +1,3 @@
-use crate::IntoUcResult;
 use crate::{models::function::{FunctionParamRow, FunctionRow}, pool::AnyPool};
 use uc_errors::{ErrorCode, UcError};
 use uuid::Uuid;

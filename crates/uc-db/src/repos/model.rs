@@ -1,4 +1,3 @@
-use crate::IntoUcResult;
 use crate::{models::model::{ModelVersionRow, RegisteredModelRow}, pool::AnyPool};
 use uc_errors::{ErrorCode, UcError};
 use uuid::Uuid;

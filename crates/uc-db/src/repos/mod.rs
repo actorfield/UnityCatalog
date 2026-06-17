@@ -1,4 +1,3 @@
-use crate::IntoUcResult;
 pub mod catalog;
 pub mod schema;
 pub mod table;

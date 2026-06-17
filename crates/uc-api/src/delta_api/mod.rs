@@ -1,7 +1,7 @@
 pub mod config;
 pub mod tables;
 pub mod credentials;
-use axum::{middleware, routing::{delete, get, head, post}, Router};
+use axum::{middleware, routing::{get, post}, Router};
 use crate::{error_ext::inject_delta_format, state::AppState};
 pub fn router(state: AppState) -> Router {
     Router::new()

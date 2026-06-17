@@ -64,6 +64,6 @@ pub async fn get_path_credentials(
     let url = params.path.unwrap_or_default();
     let scheme = UriScheme::from_url(&url);
     let ctx = CredentialContext { scheme, locations: vec![url.clone()], operation: CredentialOperation::ReadWrite, table_id: None, credential_json: None, role_arn: None, external_id: None };
-    let creds = state.credential_vendor.vend(&ctx).await?;
+    let _creds = state.credential_vendor.vend(&ctx).await?;
     Ok(Json(DeltaCredentialsResponse { storage_credentials: vec![] }))
 }

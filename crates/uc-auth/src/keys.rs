@@ -79,6 +79,7 @@ fn build_jwks(km: &KeyManager) -> String {
     // Full n/e extraction would require parsing the DER — supply a placeholder for now;
     // real JWKS construction uses the rsa crate's public key components.
     let kid = &km.key_id;
-    let n_b64 = base64::encode(&km.public_key_der); // placeholder: real impl extracts n & e
+    use base64::Engine as _;
+    let n_b64 = base64::engine::general_purpose::STANDARD.encode(&km.public_key_der); // placeholder: real impl extracts n & e
     format!(r#"{{"keys":[{{"kty":"RSA","use":"sig","kid":"{kid}","n":"{n_b64}","e":"AQAB"}}]}}"#)
 }

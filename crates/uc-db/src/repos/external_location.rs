@@ -1,7 +1,5 @@
-use crate::IntoUcResult;
 use crate::{models::external_location::ExternalLocationRow, pool::AnyPool};
 use uc_errors::{ErrorCode, UcError};
-use uuid::Uuid;
 
 pub struct ExternalLocationRepo;
 

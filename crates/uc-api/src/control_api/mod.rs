@@ -1,7 +1,7 @@
 pub mod auth;
 pub mod scim2;
 
-use axum::{middleware, routing::{delete, get, patch, post, put}, Router};
+use axum::{middleware, routing::{get, post}, Router};
 use crate::{error_ext::inject_control_format, state::AppState};
 
 pub fn router(state: AppState) -> Router {

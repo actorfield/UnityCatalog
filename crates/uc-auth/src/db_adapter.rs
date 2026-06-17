@@ -177,7 +177,7 @@ impl Adapter for SqlxAdapter {
         // Columns v0..v5 are fixed schema — we select the right WHERE clause
         // by fetching all matching rows and deleting by their IDs.
         let rows = self.load_all().await?;
-        let col_names = ["v0", "v1", "v2", "v3", "v4", "v5"];
+        let _col_names = ["v0", "v1", "v2", "v3", "v4", "v5"];
         let mut deleted = false;
         for row in &rows {
             if row.ptype != ptype { continue; }

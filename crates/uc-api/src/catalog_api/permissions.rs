@@ -3,8 +3,8 @@ use std::sync::Arc;
 use uc_auth::UcClaims;
 use uc_db::repos::UserRepo;
 use uc_errors::UcError;
-use uc_openapi::catalog::{PermissionsList, PrivilegeAssignment, PrivilegeAssignmentChange, UpdatePermissions};
-use uc_types::{Privilege, SecurableType};
+use uc_openapi::catalog::{PermissionsList, PrivilegeAssignment, UpdatePermissions};
+use uc_types::Privilege;
 use uuid::Uuid;
 use crate::{catalog_api::helpers::get_user, state::AppState};
 
@@ -75,7 +75,7 @@ async fn resolve_resource_id(
 
 pub async fn get(
     State(state): State<AppState>,
-    Extension(claims): Extension<Arc<UcClaims>>,
+    Extension(_claims): Extension<Arc<UcClaims>>,
     Path((securable_type, full_name)): Path<(String, String)>,
     Query(params): Query<GetParams>,
 ) -> Result<Json<PermissionsList>, UcError> {

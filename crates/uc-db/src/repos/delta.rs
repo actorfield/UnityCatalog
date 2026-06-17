@@ -1,4 +1,3 @@
-use crate::IntoUcResult;
 use crate::{models::delta::DeltaCommitRow, pool::AnyPool};
 use uc_errors::UcError;
 use uuid::Uuid;

@@ -2,8 +2,7 @@ use axum::{extract::{Path, State}, http::StatusCode, Json};
 use uc_db::{models::staging::StagingTableRow, repos::{SchemaRepo, StagingTableRepo, TableRepo}};
 use uc_errors::UcError;
 use uc_openapi::delta::{
-    DeltaCommit, DeltaCreateStagingTableRequest, DeltaCreateTableRequest,
-    DeltaCredentialsResponse, DeltaLoadTableResponse, DeltaProtocol, DeltaStagingTableResponse,
+    DeltaCreateStagingTableRequest, DeltaCreateTableRequest, DeltaLoadTableResponse, DeltaStagingTableResponse,
     DeltaTableMetadata, DeltaUpdateTableRequest,
 };
 use uuid::Uuid;

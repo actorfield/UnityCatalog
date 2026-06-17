@@ -1,9 +1,7 @@
 use axum::{
     extract::Request,
-    http::StatusCode,
     middleware::Next,
-    response::{IntoResponse, Response},
-    Json,
+    response::Response,
 };
 use uc_errors::{error_into_response, ErrorFormat, UcError};
 

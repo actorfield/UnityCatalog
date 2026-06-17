@@ -61,7 +61,7 @@ pub async fn volume_credentials(
 
 pub async fn model_version_credentials(
     State(state): State<AppState>,
-    Extension(claims): Extension<Arc<UcClaims>>,
+    Extension(_claims): Extension<Arc<UcClaims>>,
     Json(req): Json<GenerateTemporaryModelVersionCredential>,
 ) -> Result<Json<TemporaryCredentials>, UcError> {
     use uc_db::repos::{ModelRepo, SchemaRepo};
