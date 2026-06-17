@@ -36,6 +36,30 @@ pub fn auth_sub<'a>(state: &AppState, claims: &'a UcClaims) -> Option<&'a str> {
 
 pub fn now_ms() -> i64 { chrono::Utc::now().timestamp_millis() }
 
+/// Validate a SQL object name matches Unity Catalog naming rules.
+/// Mirrors Java's ValidationUtils.validateSqlObjectName():
+///   - non-empty
+///   - max 255 characters
+///   - no dots, slashes, whitespace, or control characters
+pub fn validate_sql_name(name: &str) -> Result<(), UcError> {
+    if name.is_empty() {
+        return Err(UcError::invalid_argument("Name must not be empty"));
+    }
+    if name.len() > 255 {
+        return Err(UcError::invalid_argument(
+            format!("Name '{}' exceeds maximum length of 255 characters", name)
+        ));
+    }
+    for ch in name.chars() {
+        if ch == '.' || ch == '/' || ch.is_whitespace() || ch.is_control() {
+            return Err(UcError::invalid_argument(
+                format!("Name '{}' contains invalid character '{}'", name, ch)
+            ));
+        }
+    }
+    Ok(())
+}
+
 /// Filter a list of resources to only those the principal can see.
 /// When auth is disabled, all resources are visible.
 /// Fix for issue #1105: schema/table/volume/function/model owners couldn't see

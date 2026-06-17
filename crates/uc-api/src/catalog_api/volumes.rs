@@ -17,6 +17,7 @@ pub async fn create(State(state): State<AppState>, Extension(claims): Extension<
         let user = get_user(&state, &claims.sub).await?;
         require_any(&state, user.id, schema.id, &[Privilege::Owner, Privilege::CreateVolume]).await?;
     }
+    validate_sql_name(&req.name)?;
     let id = Uuid::new_v4(); let now = now_ms();
     // #1143: MANAGED volumes auto-derive storage_location from storage_root hierarchy
     let storage_location = match req.volume_type {

@@ -35,13 +35,19 @@ pub async fn create(State(state): State<AppState>, Extension(claims): Extension<
 pub async fn list(State(state): State<AppState>, Query(params): Query<ListParams>) -> Result<Json<ListExternalLocationsResponse>, UcError> {
     let max = params.max_results.unwrap_or(50).min(1000);
     let (rows, next_token) = ExternalLocationRepo::list(&state.pool, params.page_token.as_deref(), max).await?;
-    let external_locations = rows.into_iter().map(|r| to_ext_loc_info(r, "")).collect();
+    let mut external_locations = Vec::with_capacity(rows.len());
+    for r in rows {
+        let cred_name = uc_db::repos::CredentialRepo::get_by_id(&state.pool, r.credential_id).await
+            .map(|c| c.name).unwrap_or_default();
+        external_locations.push(to_ext_loc_info(r, &cred_name));
+    }
     Ok(Json(ListExternalLocationsResponse { external_locations, next_page_token: next_token }))
 }
 
 pub async fn get(State(state): State<AppState>, Path(name): Path<String>) -> Result<Json<ExternalLocationInfo>, UcError> {
     let row = ExternalLocationRepo::get_by_name(&state.pool, &name).await?;
-    Ok(Json(to_ext_loc_info(row, "")))
+    let cred = uc_db::repos::CredentialRepo::get_by_id(&state.pool, row.credential_id).await?;
+    Ok(Json(to_ext_loc_info(row, &cred.name)))
 }
 
 pub async fn update(State(state): State<AppState>, Extension(claims): Extension<Arc<UcClaims>>, Path(name): Path<String>, Json(req): Json<UpdateExternalLocation>) -> Result<Json<ExternalLocationInfo>, UcError> {
@@ -52,13 +58,18 @@ pub async fn update(State(state): State<AppState>, Extension(claims): Extension<
     }
     let effective_name = req.new_name.as_deref().unwrap_or(&name);
     let now = now_ms();
+    // Resolve new credential_id if credential_name is being changed
+    let new_cred_id = if let Some(ref cred_name) = req.credential_name {
+        Some(uc_db::repos::CredentialRepo::get_by_name(&state.pool, cred_name).await?.id)
+    } else { None };
     sqlx::query(
-        "UPDATE uc_external_locations SET name=COALESCE($1,name), url=COALESCE($2,url), comment=COALESCE($3,comment), owner=COALESCE($4,owner), updated_at=$5, updated_by=$6 WHERE id=$7"
+        "UPDATE uc_external_locations SET name=COALESCE($1,name), url=COALESCE($2,url), comment=COALESCE($3,comment), owner=COALESCE($4,owner), credential_id=COALESCE($5,credential_id), updated_at=$6, updated_by=$7 WHERE id=$8"
     )
     .bind(req.new_name.as_deref())
     .bind(req.url.as_deref())
     .bind(req.comment.as_deref())
     .bind(req.owner.as_deref())
+    .bind(new_cred_id)
     .bind(now)
     .bind(auth_sub(&state, &claims))
     .bind(existing.id)

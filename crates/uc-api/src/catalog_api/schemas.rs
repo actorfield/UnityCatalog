@@ -26,6 +26,7 @@ pub async fn create(
         let user = get_user(&state, &claims.sub).await?;
         require_any(&state, user.id, catalog.id, &[Privilege::Owner, Privilege::CreateSchema]).await?;
     }
+    validate_sql_name(&req.name)?;
     let id = Uuid::new_v4();
     let now = chrono::Utc::now().timestamp_millis();
     let row = SchemaRepo::create(&state.pool, id, catalog.id, &req.name, req.comment.as_deref(), None,
@@ -92,16 +93,22 @@ pub async fn update(
     let row = SchemaRepo::update(&state.pool, existing.id, req.new_name.as_deref(),
         req.comment.as_deref(), req.owner.as_deref(), auth_sub(&state, &claims), now).await?;
     if let Some(ref props) = req.properties {
+        if !props.is_empty() {
         PropertyRepo::replace(&state.pool, row.id, "schema", props).await?;
+        }
     }
     let props = PropertyRepo::get_for_entity(&state.pool, row.id, "schema").await.ok();
     Ok(Json(to_schema_info(row, cat.to_string(), props)))
 }
 
+#[derive(serde::Deserialize)]
+pub struct DeleteParams { pub force: Option<bool> }
+
 pub async fn delete(
     State(state): State<AppState>,
     Extension(claims): Extension<Arc<UcClaims>>,
     Path(full_name): Path<String>,
+    Query(params): Query<DeleteParams>,
 ) -> Result<StatusCode, UcError> {
     let (cat, sch) = split2(&full_name)?;
     let existing = SchemaRepo::get_by_full_name(&state.pool, cat, sch).await?;
@@ -109,6 +116,39 @@ pub async fn delete(
         let user = get_user(&state, &claims.sub).await?;
         require_any(&state, user.id, existing.id, &[Privilege::Owner]).await?;
     }
+
+    let force = params.force.unwrap_or(false);
+
+    // Check for child objects before deletion
+    use uc_db::repos::{TableRepo, VolumeRepo, FunctionRepo, ModelRepo};
+    let (tables, _) = TableRepo::list(&state.pool, existing.id, None, 1).await?;
+    let (volumes, _) = VolumeRepo::list(&state.pool, existing.id, None, 1).await?;
+    let (funcs, _) = FunctionRepo::list(&state.pool, existing.id, None, 1).await?;
+    let (models, _) = ModelRepo::list_models(&state.pool, existing.id, None, 1).await?;
+
+    let has_children = !tables.is_empty() || !volumes.is_empty() || !funcs.is_empty() || !models.is_empty();
+    if has_children {
+        if !force {
+            return Err(UcError::new(
+                uc_errors::ErrorCode::FailedPrecondition,
+                format!("Schema '{}' is not empty. Use force=true to force deletion.", full_name),
+            ));
+        }
+        // force=true: delete all children
+        let (all_tables, _) = TableRepo::list(&state.pool, existing.id, None, 10000).await?;
+        for t in all_tables {
+            TableRepo::delete_columns(&state.pool, t.id).await?;
+            PropertyRepo::delete_for_entity(&state.pool, t.id, "table").await?;
+            TableRepo::delete(&state.pool, t.id).await?;
+        }
+        let (all_volumes, _) = VolumeRepo::list(&state.pool, existing.id, None, 10000).await?;
+        for v in all_volumes { VolumeRepo::delete(&state.pool, v.id).await?; }
+        let (all_funcs, _) = FunctionRepo::list(&state.pool, existing.id, None, 10000).await?;
+        for f in all_funcs { FunctionRepo::delete(&state.pool, f.id).await?; }
+        let (all_models, _) = ModelRepo::list_models(&state.pool, existing.id, None, 10000).await?;
+        for m in all_models { ModelRepo::delete_model(&state.pool, m.id).await?; }
+    }
+
     PropertyRepo::delete_for_entity(&state.pool, existing.id, "schema").await?;
     state.authorizer.remove_hierarchy_children(existing.id).await?;
     SchemaRepo::delete(&state.pool, existing.id).await?;

@@ -85,6 +85,32 @@ pub async fn update_table(
     let now = chrono::Utc::now().timestamp_millis();
     let mut latest = uc_db::repos::DeltaCommitRepo::latest_version(&state.pool, row.id).await?.unwrap_or(-1);
 
+    // Validate DeltaTableRequirement assertions before applying updates
+    if let Some(ref requirements) = req.requirements {
+        for requirement in requirements {
+            use uc_openapi::delta::DeltaTableRequirement;
+            match requirement {
+                DeltaTableRequirement::AssertTableUuid { uuid } => {
+                    if *uuid != row.id {
+                        return Err(uc_errors::UcError::new(
+                            uc_errors::ErrorCode::UpdateRequirementConflict,
+                            format!("assert-table-uuid failed: expected {} but got {}", uuid, row.id),
+                        ));
+                    }
+                }
+                DeltaTableRequirement::AssertEtag { etag } => {
+                    // Our etag is the table UUID string
+                    if etag != &row.id.to_string() {
+                        return Err(uc_errors::UcError::new(
+                            uc_errors::ErrorCode::UpdateRequirementConflict,
+                            format!("assert-etag failed: expected {} but current etag is {}", etag, row.id),
+                        ));
+                    }
+                }
+            }
+        }
+    }
+
     // Process all CCv2 update types
     for update in &req.updates {
         use uc_openapi::delta::DeltaTableUpdate;

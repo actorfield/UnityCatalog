@@ -18,6 +18,7 @@ pub async fn create(State(state): State<AppState>, Extension(claims): Extension<
         let user = get_user(&state, &claims.sub).await?;
         require_any(&state, user.id, schema.id, &[Privilege::Owner, Privilege::CreateFunction]).await?;
     }
+    validate_sql_name(&fi.name)?;
     let id = Uuid::new_v4(); let now = now_ms();
     let row = FunctionRow { id, schema_id: schema.id, name: fi.name.clone(), comment: fi.comment.clone(),
         owner: None, created_at: Some(now), created_by: auth_sub(&state, &claims).map(String::from),

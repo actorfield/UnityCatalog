@@ -11,7 +11,7 @@ use uc_openapi::catalog::{CatalogInfo, CreateCatalog, ListCatalogsResponse, Upda
 use uc_types::Privilege;
 use uuid::Uuid;
 
-use crate::state::AppState;
+use crate::{catalog_api::helpers::validate_sql_name, state::AppState};
 
 #[derive(serde::Deserialize)]
 pub struct ListParams {
@@ -34,6 +34,7 @@ pub async fn create(
         }
     }
 
+    validate_sql_name(&req.name)?;
     let id = Uuid::new_v4();
     let now = chrono::Utc::now().timestamp_millis();
     let creator = if state.auth_enabled { Some(claims.sub.as_str()) } else { None };
@@ -153,7 +154,9 @@ pub async fn update(
     ).await?;
 
     if let Some(ref props) = req.properties {
+        if !props.is_empty() {
         PropertyRepo::replace(&state.pool, row.id, "catalog", props).await?;
+        }
     }
 
     let props = PropertyRepo::get_for_entity(&state.pool, row.id, "catalog").await.ok();
@@ -173,10 +176,14 @@ pub async fn update(
     }))
 }
 
+#[derive(serde::Deserialize)]
+pub struct DeleteParams { pub force: Option<bool> }
+
 pub async fn delete(
     State(state): State<AppState>,
     Extension(claims): Extension<Arc<UcClaims>>,
     Path(name): Path<String>,
+    Query(params): Query<DeleteParams>,
 ) -> Result<StatusCode, UcError> {
     let existing = CatalogRepo::get_by_name(&state.pool, &name).await?;
 
@@ -189,6 +196,28 @@ pub async fn delete(
         }
     }
 
+    let force = params.force.unwrap_or(false);
+
+    // Check for child schemas before deletion
+    let (schemas, _) = uc_db::repos::SchemaRepo::list(&state.pool, existing.id, None, 1).await?;
+    if !schemas.is_empty() {
+        if !force {
+            return Err(UcError::new(
+                uc_errors::ErrorCode::FailedPrecondition,
+                format!("Catalog '{}' is not empty. Use force=true to force deletion.", name),
+            ));
+        }
+        // force=true: delete all child schemas (with their children)
+        let (all_schemas, _) = uc_db::repos::SchemaRepo::list(&state.pool, existing.id, None, 10000).await?;
+        for schema in all_schemas {
+            let schema_full = format!("{}.{}", name, schema.name);
+            delete_schema_children(&state.pool, schema.id).await?;
+            PropertyRepo::delete_for_entity(&state.pool, schema.id, "schema").await?;
+            state.authorizer.remove_hierarchy_children(schema.id).await?;
+            uc_db::repos::SchemaRepo::delete(&state.pool, schema.id).await?;
+        }
+    }
+
     // Remove properties first
     PropertyRepo::delete_for_entity(&state.pool, existing.id, "catalog").await?;
     // Remove hierarchy
@@ -197,4 +226,33 @@ pub async fn delete(
     CatalogRepo::delete(&state.pool, &name).await?;
 
     Ok(StatusCode::OK)
+}
+
+/// Delete all children of a schema (tables, volumes, functions, models) without deleting the schema itself.
+async fn delete_schema_children(pool: &uc_db::AnyPool, schema_id: uuid::Uuid) -> Result<(), UcError> {
+    use uc_db::repos::{TableRepo, VolumeRepo, FunctionRepo, ModelRepo};
+
+    // Delete tables (with columns and properties)
+    let (tables, _) = TableRepo::list(pool, schema_id, None, 10000).await?;
+    for t in tables {
+        TableRepo::delete_columns(pool, t.id).await?;
+        uc_db::repos::PropertyRepo::delete_for_entity(pool, t.id, "table").await?;
+        TableRepo::delete(pool, t.id).await?;
+    }
+    // Delete volumes
+    let (volumes, _) = VolumeRepo::list(pool, schema_id, None, 10000).await?;
+    for v in volumes {
+        VolumeRepo::delete(pool, v.id).await?;
+    }
+    // Delete functions
+    let (funcs, _) = FunctionRepo::list(pool, schema_id, None, 10000).await?;
+    for f in funcs {
+        FunctionRepo::delete(pool, f.id).await?;
+    }
+    // Delete registered models (with versions)
+    let (models, _) = ModelRepo::list_models(pool, schema_id, None, 10000).await?;
+    for m in models {
+        ModelRepo::delete_model(pool, m.id).await?;
+    }
+    Ok(())
 }

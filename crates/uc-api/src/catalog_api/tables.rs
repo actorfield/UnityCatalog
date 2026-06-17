@@ -31,6 +31,7 @@ pub async fn create(
         require_any(&state, user.id, schema.id, &[Privilege::Owner, Privilege::CreateTable]).await?;
     }
 
+    validate_sql_name(&req.name)?;
     let now = now_ms();
     let caller = auth_sub(&state, &claims).map(String::from);
 

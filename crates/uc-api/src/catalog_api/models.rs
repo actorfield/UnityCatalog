@@ -17,6 +17,7 @@ pub async fn create_model(State(state): State<AppState>, Extension(claims): Exte
         let user = get_user(&state, &claims.sub).await?;
         require_any(&state, user.id, schema.id, &[Privilege::Owner, Privilege::CreateModel]).await?;
     }
+    validate_sql_name(&req.name)?;
     let id = Uuid::new_v4(); let now = now_ms();
     // #1143: auto-derive model storage location from storage_root if not provided
     let model_storage = match req.storage_location {
@@ -77,17 +78,21 @@ pub async fn update_model(State(state): State<AppState>, Extension(claims): Exte
         require_any(&state, user.id, existing.id, &[Privilege::Owner]).await?;
     }
     let now = now_ms();
+    if let Some(ref new_name) = req.new_name { validate_sql_name(new_name)?; }
     sqlx::query(
-        "UPDATE uc_registered_models SET comment=COALESCE($1,comment), owner=COALESCE($2,owner), updated_at=$3 WHERE id=$4"
+        "UPDATE uc_registered_models SET name=COALESCE($1,name), comment=COALESCE($2,comment), owner=COALESCE($3,owner), updated_at=$4, updated_by=$5 WHERE id=$6"
     )
+    .bind(req.new_name.as_deref())
     .bind(req.comment.as_deref())
     .bind(req.owner.as_deref())
     .bind(now)
+    .bind(auth_sub(&state, &claims))
     .bind(existing.id)
     .execute(state.pool.as_ref())
     .await.map_err(crate::db_err)?;
-    let updated = ModelRepo::get_model_by_schema_and_name(&state.pool, schema.id, req.new_name.as_deref().unwrap_or(mdl)).await
-        .unwrap_or(existing);
+    let effective_name = req.new_name.as_deref().unwrap_or(mdl);
+    let updated = ModelRepo::get_model_by_schema_and_name(&state.pool, schema.id, effective_name).await
+        .unwrap_or_else(|_| existing.clone());
     Ok(Json(to_model_info(updated, cat, sch)))
 }
 

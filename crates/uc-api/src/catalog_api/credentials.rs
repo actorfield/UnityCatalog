@@ -60,12 +60,14 @@ pub async fn update(State(state): State<AppState>, Extension(claims): Extension<
     }
     let effective_name = req.new_name.as_deref().unwrap_or(&name);
     let now = now_ms();
+    let new_credential_json = req.aws_iam_role.as_ref().map(|r| serde_json::to_string(r).unwrap_or_default());
     sqlx::query(
-        "UPDATE uc_credentials SET name=COALESCE($1,name), comment=COALESCE($2,comment), owner=COALESCE($3,owner), updated_at=$4, updated_by=$5 WHERE id=$6"
+        "UPDATE uc_credentials SET name=COALESCE($1,name), comment=COALESCE($2,comment), owner=COALESCE($3,owner), credential=COALESCE($4,credential), updated_at=$5, updated_by=$6 WHERE id=$7"
     )
     .bind(req.new_name.as_deref())
     .bind(req.comment.as_deref())
     .bind(req.owner.as_deref())
+    .bind(new_credential_json.as_deref())
     .bind(now)
     .bind(auth_sub(&state, &claims))
     .bind(existing.id)
