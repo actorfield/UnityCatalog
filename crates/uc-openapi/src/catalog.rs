@@ -754,6 +754,7 @@ pub struct UpdatePermissions {
 // ── Temporary Credentials ─────────────────────────────────────────────────────
 
 #[derive(Debug, Serialize, Deserialize)]
+#[derive(Clone)]
 pub struct AwsCredentials {
     pub access_key_id: String,
     pub secret_access_key: String,
@@ -763,16 +764,19 @@ pub struct AwsCredentials {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
+#[derive(Clone)]
 pub struct AzureUserDelegationSas {
     pub sas_token: String,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
+#[derive(Clone)]
 pub struct GcpOauthToken {
     pub oauth_token: String,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
+#[derive(Clone)]
 pub struct TemporaryCredentials {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub aws_temp_credentials: Option<AwsCredentials>,
