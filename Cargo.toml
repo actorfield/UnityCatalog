@@ -1,0 +1,43 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/uc-errors",
+    "crates/uc-types",
+    "crates/uc-openapi",
+    "crates/uc-db",
+    "crates/uc-auth",
+    "crates/uc-credentials",
+    "crates/uc-api",
+    "crates/uc-server",
+]
+
+[workspace.dependencies]
+axum = { version = "0.7", features = ["macros"] }
+tower = "0.4"
+tower-http = { version = "0.5", features = ["trace", "cors"] }
+tokio = { version = "1", features = ["full"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sqlx = { version = "0.7", features = ["runtime-tokio-rustls", "uuid", "chrono"] }
+uuid = { version = "1", features = ["v4", "serde"] }
+chrono = { version = "0.4", features = ["serde"] }
+jsonwebtoken = "9"
+casbin = { version = "2", features = ["runtime-tokio"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+thiserror = "1"
+anyhow = "1"
+config = "0.14"
+clap = { version = "4", features = ["derive"] }
+base64 = "0.22"
+hex = "0.4"
+rand = "0.8"
+rsa = { version = "0.9", features = ["sha2", "pkcs5"] }
+
+# Cloud SDK deps (feature-gated in uc-credentials)
+aws-config = { version = "1", default-features = false, features = ["rustls"] }
+aws-sdk-sts = { version = "1", default-features = false, features = ["rustls"] }
+
+[profile.release]
+lto = true
+codegen-units = 1

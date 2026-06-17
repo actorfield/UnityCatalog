@@ -1,0 +1,27 @@
+[package]
+name = "uc-api"
+version = "0.1.0"
+edition = "2021"
+
+[features]
+default = ["sqlite"]
+sqlite = ["uc-db/sqlite", "uc-auth/sqlite"]
+postgres = ["uc-db/postgres", "uc-auth/postgres"]
+
+[dependencies]
+uc-errors = { path = "../uc-errors" }
+uc-types = { path = "../uc-types" }
+uc-openapi = { path = "../uc-openapi" }
+uc-db = { path = "../uc-db" }
+uc-auth = { path = "../uc-auth" }
+uc-credentials = { path = "../uc-credentials" }
+axum = { workspace = true }
+tower = { workspace = true }
+tower-http = { workspace = true }
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+uuid = { workspace = true }
+chrono = { workspace = true }
+tracing = { workspace = true }
+thiserror = { workspace = true }

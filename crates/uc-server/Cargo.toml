@@ -1,0 +1,37 @@
+[package]
+name = "uc-server"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "uc-server"
+path = "src/main.rs"
+
+[features]
+default = ["sqlite"]
+sqlite = ["uc-api/sqlite", "uc-db/sqlite", "uc-auth/sqlite"]
+postgres = ["uc-api/postgres", "uc-db/postgres", "uc-auth/postgres"]
+
+[dependencies]
+uc-errors = { path = "../uc-errors" }
+uc-types = { path = "../uc-types" }
+uc-openapi = { path = "../uc-openapi" }
+uc-db = { path = "../uc-db" }
+uc-auth = { path = "../uc-auth" }
+uc-credentials = { path = "../uc-credentials" }
+uc-api = { path = "../uc-api" }
+axum = { workspace = true }
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+uuid = { workspace = true }
+chrono = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+clap = { workspace = true }
+config = { workspace = true }
+anyhow = { workspace = true }
+rsa = { workspace = true }
+rand = { workspace = true }
+base64 = { workspace = true }
+hex = { workspace = true }

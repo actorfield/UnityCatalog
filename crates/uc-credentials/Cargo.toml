@@ -1,0 +1,23 @@
+[package]
+name = "uc-credentials"
+version = "0.1.0"
+edition = "2021"
+
+[features]
+default = []
+aws = ["dep:aws-config", "dep:aws-sdk-sts"]
+
+[dependencies]
+uc-errors = { path = "../uc-errors" }
+uc-types = { path = "../uc-types" }
+uc-openapi = { path = "../uc-openapi" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+thiserror = { workspace = true }
+chrono = { workspace = true }
+uuid = { workspace = true }
+
+aws-config = { workspace = true, optional = true }
+aws-sdk-sts = { workspace = true, optional = true }
