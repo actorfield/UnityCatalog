@@ -99,3 +99,55 @@ fn build_jwks(km: &KeyManager) -> String {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn generate_produces_valid_der_bytes() {
+        let km = KeyManager::generate().unwrap();
+        assert!(!km.private_key_der.is_empty());
+        assert!(!km.public_key_der.is_empty());
+        assert!(!km.key_id.is_empty());
+        assert_eq!(km.key_id.len(), 32, "key_id should be 32 hex chars");
+    }
+
+    #[test]
+    fn load_or_generate_creates_files_on_first_run() {
+        let dir = std::env::temp_dir().join(format!("uc_keys_test_{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let km = KeyManager::load_or_generate(&dir).unwrap();
+        assert!(dir.join("private_key.der").exists());
+        assert!(dir.join("public_key.der").exists());
+        assert!(dir.join("key_id.txt").exists());
+        assert!(dir.join("certs.json").exists());
+
+        // Load path: second call returns same key_id
+        let km2 = KeyManager::load_or_generate(&dir).unwrap();
+        assert_eq!(km.key_id, km2.key_id);
+        assert_eq!(km.public_key_der, km2.public_key_der);
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn certs_json_contains_valid_base64url_n() {
+        let dir = std::env::temp_dir().join(format!("uc_keys_certs_{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        KeyManager::load_or_generate(&dir).unwrap();
+
+        let certs = std::fs::read_to_string(dir.join("certs.json")).unwrap();
+        assert!(certs.contains("\"kty\":\"RSA\""));
+        // n should be base64url — no + or /
+        let n_start = certs.find("\"n\":\"").unwrap() + 5;
+        let n_end = certs[n_start..].find('"').unwrap() + n_start;
+        let n_val = &certs[n_start..n_end];
+        assert!(!n_val.contains('+'), "n must be base64url");
+        assert!(!n_val.contains('/'), "n must be base64url");
+        assert!(n_val.len() > 100, "n should be a long RSA modulus");
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+}

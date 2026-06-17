@@ -283,4 +283,70 @@ mod tests {
         assert!(e.to_string().contains("NOT_FOUND"));
         assert!(e.to_string().contains("my_catalog"));
     }
+
+    #[test]
+    fn uc_error_constructors() {
+        let e = UcError::new(ErrorCode::Internal, "oops");
+        assert_eq!(e.code, ErrorCode::Internal);
+        assert_eq!(e.message, "oops");
+
+        let e = UcError::already_exists("Schema", "s1");
+        assert_eq!(e.code, ErrorCode::AlreadyExists);
+        assert!(e.message.contains("s1"));
+
+        let e = UcError::invalid_argument("bad input");
+        assert_eq!(e.code, ErrorCode::InvalidArgument);
+
+        let e = UcError::internal("crash");
+        assert_eq!(e.code, ErrorCode::Internal);
+
+        let e = UcError::permission_denied("no access");
+        assert_eq!(e.code, ErrorCode::PermissionDenied);
+
+        let e = UcError::unauthenticated("no token");
+        assert_eq!(e.code, ErrorCode::Unauthenticated);
+    }
+
+    #[test]
+    fn all_error_codes_have_uc_status() {
+        let codes = [
+            ErrorCode::InvalidArgument, ErrorCode::UnsupportedTableFormat,
+            ErrorCode::NotFound, ErrorCode::CatalogNotFound, ErrorCode::SchemaNotFound,
+            ErrorCode::TableNotFound, ErrorCode::AlreadyExists, ErrorCode::PermissionDenied,
+            ErrorCode::Unauthenticated, ErrorCode::ResourceExhausted, ErrorCode::FailedPrecondition,
+            ErrorCode::Aborted, ErrorCode::CommitVersionConflict, ErrorCode::UpdateRequirementConflict,
+            ErrorCode::OutOfRange, ErrorCode::Unimplemented, ErrorCode::Internal, ErrorCode::DataLoss,
+            ErrorCode::ResourceAlreadyExists, ErrorCode::CatalogAlreadyExists,
+            ErrorCode::SchemaAlreadyExists, ErrorCode::TableAlreadyExists,
+            ErrorCode::StorageCredentialAlreadyExists, ErrorCode::ExternalLocationAlreadyExists,
+        ];
+        for code in &codes {
+            let status = code.uc_status();
+            assert!(status.as_u16() >= 400, "{:?} should be 4xx/5xx", code);
+        }
+    }
+
+    #[test]
+    fn all_error_codes_have_as_str() {
+        let codes = [ErrorCode::InvalidArgument, ErrorCode::NotFound, ErrorCode::Internal];
+        for code in &codes {
+            assert!(!code.as_str().is_empty());
+        }
+    }
+
+    #[test]
+    fn all_error_codes_have_delta_error_type() {
+        let codes = [ErrorCode::CommitVersionConflict, ErrorCode::UpdateRequirementConflict,
+                     ErrorCode::Unimplemented, ErrorCode::DataLoss];
+        for code in &codes {
+            assert!(!code.delta_error_type().is_empty());
+        }
+    }
+
+    #[test]
+    fn error_format_variants_exist() {
+        let _ = ErrorFormat::Catalog;
+        let _ = ErrorFormat::Control;
+        let _ = ErrorFormat::Delta;
+    }
 }

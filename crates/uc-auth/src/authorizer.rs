@@ -178,3 +178,126 @@ impl Authorizer for AllowingAuthorizer {
     async fn list_privileges(&self, _p: Uuid, _r: Uuid) -> Result<Vec<Privilege>, UcError> { Ok(vec![]) }
     async fn list_grants_on_resource(&self, _r: Uuid) -> Result<Vec<(Uuid, Vec<Privilege>)>, UcError> { Ok(vec![]) }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ── AllowingAuthorizer ────────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn allowing_authorizer_always_permits() {
+        let auth = AllowingAuthorizer;
+        let p = Uuid::new_v4();
+        let r = Uuid::new_v4();
+        assert!(auth.authorize(p, r, Privilege::Owner).await.unwrap());
+        assert!(auth.authorize_any(p, r, &[Privilege::Select, Privilege::Modify]).await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn allowing_authorizer_grant_revoke_are_noops() {
+        let auth = AllowingAuthorizer;
+        let p = Uuid::new_v4();
+        let r = Uuid::new_v4();
+        // should not error
+        auth.grant(p, r, Privilege::Owner).await.unwrap();
+        auth.revoke(p, r, Privilege::Owner).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn allowing_authorizer_hierarchy_noops() {
+        let auth = AllowingAuthorizer;
+        let parent = Uuid::new_v4();
+        let child = Uuid::new_v4();
+        auth.add_hierarchy_child(parent, child).await.unwrap();
+        auth.remove_hierarchy_children(parent).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn allowing_authorizer_list_returns_empty() {
+        let auth = AllowingAuthorizer;
+        let p = Uuid::new_v4();
+        let r = Uuid::new_v4();
+        let privs = auth.list_privileges(p, r).await.unwrap();
+        assert!(privs.is_empty(), "no-auth mode should return empty privilege list");
+        let grants = auth.list_grants_on_resource(r).await.unwrap();
+        assert!(grants.is_empty());
+    }
+
+    // ── UcAuthorizer in-memory ────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn uc_authorizer_grant_and_check() {
+        let auth = UcAuthorizer::new_in_memory().await.unwrap();
+        let principal = Uuid::new_v4();
+        let resource = Uuid::new_v4();
+
+        // Initially not authorised
+        assert!(!auth.authorize(principal, resource, Privilege::Select).await.unwrap());
+
+        // Grant then check
+        auth.grant(principal, resource, Privilege::Select).await.unwrap();
+        assert!(auth.authorize(principal, resource, Privilege::Select).await.unwrap());
+
+        // Different privilege still not granted
+        assert!(!auth.authorize(principal, resource, Privilege::Modify).await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn uc_authorizer_revoke() {
+        let auth = UcAuthorizer::new_in_memory().await.unwrap();
+        let p = Uuid::new_v4();
+        let r = Uuid::new_v4();
+        auth.grant(p, r, Privilege::Owner).await.unwrap();
+        assert!(auth.authorize(p, r, Privilege::Owner).await.unwrap());
+        auth.revoke(p, r, Privilege::Owner).await.unwrap();
+        assert!(!auth.authorize(p, r, Privilege::Owner).await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn uc_authorizer_authorize_any() {
+        let auth = UcAuthorizer::new_in_memory().await.unwrap();
+        let p = Uuid::new_v4();
+        let r = Uuid::new_v4();
+        auth.grant(p, r, Privilege::Select).await.unwrap();
+        // authorize_any with Select in list → true
+        assert!(auth.authorize_any(p, r, &[Privilege::Select, Privilege::Modify]).await.unwrap());
+        // authorize_any with only Modify → false
+        assert!(!auth.authorize_any(p, r, &[Privilege::Modify]).await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn uc_authorizer_list_privileges() {
+        let auth = UcAuthorizer::new_in_memory().await.unwrap();
+        let p = Uuid::new_v4();
+        let r = Uuid::new_v4();
+        auth.grant(p, r, Privilege::Select).await.unwrap();
+        auth.grant(p, r, Privilege::Modify).await.unwrap();
+        let privs = auth.list_privileges(p, r).await.unwrap();
+        assert!(privs.contains(&Privilege::Select));
+        assert!(privs.contains(&Privilege::Modify));
+        assert_eq!(privs.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn uc_authorizer_list_grants_on_resource() {
+        let auth = UcAuthorizer::new_in_memory().await.unwrap();
+        let p1 = Uuid::new_v4();
+        let p2 = Uuid::new_v4();
+        let r = Uuid::new_v4();
+        auth.grant(p1, r, Privilege::Owner).await.unwrap();
+        auth.grant(p2, r, Privilege::Select).await.unwrap();
+        let grants = auth.list_grants_on_resource(r).await.unwrap();
+        assert_eq!(grants.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn uc_authorizer_hierarchy() {
+        let auth = UcAuthorizer::new_in_memory().await.unwrap();
+        let parent = Uuid::new_v4();
+        let child = Uuid::new_v4();
+        // Should not error
+        auth.add_hierarchy_child(parent, child).await.unwrap();
+        auth.remove_hierarchy_children(parent).await.unwrap();
+    }
+}

@@ -97,11 +97,57 @@ mod tests {
     fn wrong_algorithm_rejected() {
         let km = KeyManager::generate().expect("key gen");
         let config = JwtConfig::from_der(&km.private_key_der, &km.public_key_der, "kid".into()).unwrap();
-        // Tamper with signature by decoding with a different key
         let km2 = KeyManager::generate().expect("key gen 2");
         let config2 = JwtConfig::from_der(&km2.private_key_der, &km2.public_key_der, "kid2".into()).unwrap();
         let claims = UcClaims::new_service();
         let token = encode_token(&config, &claims).unwrap();
         assert!(decode_token(&config2, &token).is_err());
+    }
+
+    #[test]
+    fn service_token_has_service_type() {
+        let claims = UcClaims::new_service();
+        assert_eq!(claims.sub, "uc_service");
+        assert_eq!(claims.iss, "internal");
+        assert_eq!(claims.token_type, uc_types::TokenType::Service);
+    }
+
+    #[test]
+    fn access_token_has_access_type() {
+        let claims = UcClaims::new_access("user@example.com");
+        assert_eq!(claims.sub, "user@example.com");
+        assert_eq!(claims.token_type, uc_types::TokenType::Access);
+        assert!(!claims.jti.is_empty());
+        assert!(claims.iat > 0);
+    }
+
+    #[test]
+    fn service_token_round_trip() {
+        let km = KeyManager::generate().unwrap();
+        let config = JwtConfig::from_der(&km.private_key_der, &km.public_key_der, "kid".into()).unwrap();
+        let claims = UcClaims::new_service();
+        let token = encode_token(&config, &claims).unwrap();
+        let decoded = decode_token(&config, &token).unwrap();
+        assert_eq!(decoded.claims.token_type, uc_types::TokenType::Service);
+    }
+
+    #[test]
+    fn missing_iss_field_rejected() {
+        // A token without iss=internal should fail validation
+        let km = KeyManager::generate().unwrap();
+        let config = JwtConfig::from_der(&km.private_key_der, &km.public_key_der, "k".into()).unwrap();
+        // Forge a token with wrong issuer by creating claims with wrong iss
+        let mut claims = UcClaims::new_access("test@x.com");
+        claims.iss = "external".to_string();
+        let token = encode_token(&config, &claims).unwrap();
+        // Should fail because iss != "internal"
+        assert!(decode_token(&config, &token).is_err());
+    }
+
+    #[test]
+    fn jti_is_unique_per_token() {
+        let c1 = UcClaims::new_access("a@b.com");
+        let c2 = UcClaims::new_access("a@b.com");
+        assert_ne!(c1.jti, c2.jti);
     }
 }

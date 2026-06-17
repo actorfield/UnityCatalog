@@ -192,4 +192,56 @@ mod tests {
         assert_eq!(UriScheme::from_url("file:///local/path"), UriScheme::File);
         assert_eq!(UriScheme::from_url("unknown://x"), UriScheme::Null);
     }
+
+    #[test]
+    fn all_privileges_round_trip_casbin() {
+        // Every privilege must survive as_casbin_str → from_casbin_str
+        let all = [
+            Privilege::Owner, Privilege::CreateCatalog, Privilege::UseCatalog,
+            Privilege::CreateSchema, Privilege::UseSchema, Privilege::CreateTable,
+            Privilege::Select, Privilege::Modify, Privilege::CreateFunction,
+            Privilege::Execute, Privilege::CreateVolume, Privilege::ReadVolume,
+            Privilege::CreateModel, Privilege::CreateExternalLocation,
+            Privilege::ReadFiles, Privilege::WriteFiles, Privilege::CreateExternalTable,
+            Privilege::CreateExternalVolume, Privilege::CreateManagedStorage,
+            Privilege::CreateStorageCredential,
+        ];
+        for p in &all {
+            let s = p.as_casbin_str();
+            let back = Privilege::from_casbin_str(s)
+                .unwrap_or_else(|| panic!("from_casbin_str failed for {:?} -> '{}'", p, s));
+            assert_eq!(*p, back);
+        }
+    }
+
+    #[test]
+    fn from_casbin_str_unknown_returns_none() {
+        assert!(Privilege::from_casbin_str("UNKNOWN_PRIV").is_none());
+        assert!(Privilege::from_casbin_str("").is_none());
+    }
+
+    #[test]
+    fn securable_type_from_str() {
+        assert!(matches!(SecurableType::from_str("CATALOG"), Some(SecurableType::Catalog)));
+        assert!(matches!(SecurableType::from_str("catalog"), Some(SecurableType::Catalog)));
+        assert!(matches!(SecurableType::from_str("SCHEMA"), Some(SecurableType::Schema)));
+        assert!(matches!(SecurableType::from_str("TABLE"), Some(SecurableType::Table)));
+        assert!(matches!(SecurableType::from_str("VOLUME"), Some(SecurableType::Volume)));
+        assert!(matches!(SecurableType::from_str("FUNCTION"), Some(SecurableType::Function)));
+        assert!(matches!(SecurableType::from_str("MODEL"), Some(SecurableType::RegisteredModel)));
+        assert!(matches!(SecurableType::from_str("REGISTERED_MODEL"), Some(SecurableType::RegisteredModel)));
+        assert!(matches!(SecurableType::from_str("METASTORE"), Some(SecurableType::Metastore)));
+        assert!(matches!(SecurableType::from_str("EXTERNAL_LOCATION"), Some(SecurableType::ExternalLocation)));
+        assert!(matches!(SecurableType::from_str("STORAGE_CREDENTIAL"), Some(SecurableType::StorageCredential)));
+        assert!(SecurableType::from_str("UNKNOWN").is_none());
+    }
+
+    #[test]
+    fn token_type_variants_exist() {
+        // Verify both variants exist and are distinct
+        let access = TokenType::Access;
+        let service = TokenType::Service;
+        assert!(access != service);
+        // serde round-trip is tested in uc-openapi/uc-auth which depend on serde
+    }
 }
