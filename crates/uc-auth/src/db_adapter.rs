@@ -32,12 +32,12 @@ impl CasbinRuleRow {
 }
 
 pub struct SqlxAdapter {
-    pool: sqlx::SqlitePool,
+    pool: uc_db::AnyPool,
     is_filtered: bool,
 }
 
 impl SqlxAdapter {
-    pub async fn new(pool: sqlx::SqlitePool) -> CasbinResult<Self> {
+    pub async fn new(pool: uc_db::AnyPool) -> CasbinResult<Self> {
         Ok(Self { pool, is_filtered: false })
     }
 
@@ -108,21 +108,39 @@ impl Adapter for SqlxAdapter {
     }
 
     async fn save_policy(&mut self, model: &mut dyn Model) -> CasbinResult<()> {
-        // Delete all and re-insert from model
-        sqlx::query("DELETE FROM casbin_rule")
-            .execute(&self.pool)
-            .await
-            .map_err(|e| casbin::Error::AdapterError(casbin::error::AdapterError(Box::new(e))))?;
-
+        // Collect all rules from the model first, then run delete+insert in a single
+        // transaction to minimise the window where the table is empty.
+        let mut all_rules: Vec<(String, Vec<String>)> = Vec::new();
         for ptype in &["p", "g", "g2"] {
             if let Some(policy_map) = model.get_model().get(*ptype) {
                 for (_, assertion) in policy_map {
                     for rule in &assertion.policy {
-                        self.insert_rule(ptype, rule).await?;
+                        all_rules.push((ptype.to_string(), rule.clone()));
                     }
                 }
             }
         }
+
+        let mut tx = self.pool.begin().await
+            .map_err(|e| casbin::Error::AdapterError(casbin::error::AdapterError(Box::new(e))))?;
+        sqlx::query("DELETE FROM casbin_rule")
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| casbin::Error::AdapterError(casbin::error::AdapterError(Box::new(e))))?;
+        for (ptype, rule) in &all_rules {
+            let vals: Vec<&str> = rule.iter().map(|s| s.as_str()).collect();
+            let v: Vec<&str> = { let mut v = vals.clone(); v.resize(6, ""); v };
+            sqlx::query(
+                "INSERT OR IGNORE INTO casbin_rule (ptype, v0, v1, v2, v3, v4, v5) VALUES ($1,$2,$3,$4,$5,$6,$7)",
+            )
+            .bind(ptype.as_str())
+            .bind(v[0]).bind(v[1]).bind(v[2]).bind(v[3]).bind(v[4]).bind(v[5])
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| casbin::Error::AdapterError(casbin::error::AdapterError(Box::new(e))))?;
+        }
+        tx.commit().await
+            .map_err(|e| casbin::Error::AdapterError(casbin::error::AdapterError(Box::new(e))))?;
         Ok(())
     }
 
@@ -155,20 +173,31 @@ impl Adapter for SqlxAdapter {
     }
 
     async fn remove_filtered_policy(&mut self, _sec: &str, ptype: &str, field_index: usize, field_values: Vec<String>) -> CasbinResult<bool> {
-        // Build a dynamic DELETE based on which v-columns are provided
-        let mut conditions = vec![format!("ptype='{}'", ptype)];
+        // Use fully parameterized DELETE to prevent SQL injection.
+        // Columns v0..v5 are fixed schema — we select the right WHERE clause
+        // by fetching all matching rows and deleting by their IDs.
+        let rows = self.load_all().await?;
         let col_names = ["v0", "v1", "v2", "v3", "v4", "v5"];
-        for (i, val) in field_values.iter().enumerate() {
-            if !val.is_empty() {
-                conditions.push(format!("{}='{}'", col_names[field_index + i], val.replace('\'', "''")));
+        let mut deleted = false;
+        for row in &rows {
+            if row.ptype != ptype { continue; }
+            let row_vals = [&row.v0, &row.v1, &row.v2, &row.v3, &row.v4, &row.v5];
+            let matches = field_values.iter().enumerate().all(|(i, val)| {
+                if val.is_empty() { true } else { row_vals[field_index + i] == val }
+            });
+            if matches {
+                let result = sqlx::query(
+                    "DELETE FROM casbin_rule WHERE ptype=$1 AND v0=$2 AND v1=$3 AND v2=$4 AND v3=$5 AND v4=$6 AND v5=$7"
+                )
+                .bind(&row.ptype).bind(&row.v0).bind(&row.v1).bind(&row.v2)
+                .bind(&row.v3).bind(&row.v4).bind(&row.v5)
+                .execute(&self.pool)
+                .await
+                .map_err(|e| casbin::Error::AdapterError(casbin::error::AdapterError(Box::new(e))))?;
+                if result.rows_affected() > 0 { deleted = true; }
             }
         }
-        let sql = format!("DELETE FROM casbin_rule WHERE {}", conditions.join(" AND "));
-        let result = sqlx::query(&sql)
-            .execute(&self.pool)
-            .await
-            .map_err(|e| casbin::Error::AdapterError(casbin::error::AdapterError(Box::new(e))))?;
-        Ok(result.rows_affected() > 0)
+        Ok(deleted)
     }
 
     fn is_filtered(&self) -> bool {

@@ -15,7 +15,18 @@ impl DeltaCommitRepo {
         .bind(row.id).bind(row.table_id).bind(row.commit_version).bind(&row.commit_filename)
         .bind(row.commit_filesize).bind(row.commit_file_modification_timestamp)
         .bind(row.commit_timestamp).bind(row.is_backfilled_latest_commit)
-        .fetch_one(pool).await.map_err(crate::sqlx_err)
+        .fetch_one(pool)
+        .await
+        .map_err(|e| match e {
+            // Unique constraint on (table_id, commit_version) → 409 CommitVersionConflict, not 500
+            sqlx::Error::Database(ref db) if db.is_unique_violation() => {
+                uc_errors::UcError::new(
+                    uc_errors::ErrorCode::CommitVersionConflict,
+                    format!("Commit version {} already exists for this table", row.commit_version),
+                )
+            }
+            other => crate::sqlx_err(other),
+        })
     }
 
     pub async fn list_for_table(

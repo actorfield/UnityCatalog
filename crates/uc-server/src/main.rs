@@ -67,15 +67,6 @@ async fn main() -> anyhow::Result<()> {
         key_manager.key_id.clone(),
     ).context("Failed to create JWT config")?;
 
-    // Write service token — uses the admin email as sub so auth-enabled handlers
-    // can resolve it to the admin user who has OWNER on the metastore
-    let admin_email = "admin@unitycatalog.io";
-    let service_claims = uc_auth::jwt::UcClaims::new_access(admin_email);
-    let service_token = uc_auth::jwt::encode_token(&jwt_config, &service_claims)
-        .context("Failed to create service token")?;
-    std::fs::write(args.config_dir.join("token.txt"), &service_token)
-        .context("Failed to write service token")?;
-
     // ── 2. Database pool + migrations ─────────────────────────────────────────
     std::fs::create_dir_all("./etc/db").ok();
     let pool = AnyPool::connect(&args.database_url)
@@ -108,8 +99,8 @@ async fn main() -> anyhow::Result<()> {
     };
 
     // ── 5. Admin user initialization ──────────────────────────────────────────
+    let admin_email = "admin@unitycatalog.io";
     if !args.no_auth {
-        let admin_email = "admin@unitycatalog.io";
         if UserRepo::get_by_email(&pool, admin_email).await?.is_none() {
             let admin_id = Uuid::new_v4();
             let now = chrono::Utc::now().timestamp_millis();
@@ -120,6 +111,16 @@ async fn main() -> anyhow::Result<()> {
             info!("Created admin user: {}", admin_email);
         }
     }
+
+    // Write token.txt AFTER admin user exists — uses ACCESS token so middleware
+    // performs the normal user DB lookup (admin@unitycatalog.io must be in uc_users).
+    // The SERVICE token bypass path in middleware is intentionally not used for token.txt;
+    // instead, we ensure the admin user is always created first to avoid the startup race.
+    let token_claims = uc_auth::jwt::UcClaims::new_access(admin_email);
+    let token = uc_auth::jwt::encode_token(&jwt_config, &token_claims)
+        .context("Failed to create admin token")?;
+    std::fs::write(args.config_dir.join("token.txt"), &token)
+        .context("Failed to write token.txt")?;
 
     // ── 6. App state ──────────────────────────────────────────────────────────
     let state = AppState::new(

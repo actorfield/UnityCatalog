@@ -8,6 +8,26 @@ use uc_types::{Privilege, SecurableType};
 use uuid::Uuid;
 use crate::{catalog_api::helpers::get_user, state::AppState};
 
+/// Convert a list of (principal_uuid, privileges) pairs into PrivilegeAssignment responses
+/// by resolving UUIDs back to email strings. Falls back to UUID string if user not found.
+async fn grants_to_assignments(
+    pool: &uc_db::AnyPool,
+    grants: Vec<(uuid::Uuid, Vec<Privilege>)>,
+) -> Result<Vec<PrivilegeAssignment>, UcError> {
+    let mut result = Vec::new();
+    for (principal_id, privs) in grants {
+        let email = match UserRepo::get_by_id(pool, principal_id).await {
+            Ok(u) => u.email.unwrap_or(u.name),
+            Err(_) => principal_id.to_string(),
+        };
+        result.push(PrivilegeAssignment {
+            principal: email,
+            privileges: privs.iter().map(|p| p.as_casbin_str().to_string()).collect(),
+        });
+    }
+    Ok(result)
+}
+
 #[derive(serde::Deserialize)]
 pub struct GetParams {
     pub principal: Option<String>,
@@ -61,36 +81,23 @@ pub async fn get(
 ) -> Result<Json<PermissionsList>, UcError> {
     let resource_id = resolve_resource_id(&state, &securable_type, &full_name).await?;
 
-    let grants = if let Some(ref principal_email) = params.principal {
-        // Filter to a specific principal
+    let privilege_assignments: Vec<PrivilegeAssignment> = if let Some(ref principal_email) = params.principal {
         match UserRepo::get_by_email(&state.pool, principal_email).await? {
             Some(user) => {
                 let privs = state.authorizer.list_privileges(user.id, resource_id).await?;
                 if privs.is_empty() { vec![] } else {
-                    vec![(user.id, privs, principal_email.clone())]
+                    vec![PrivilegeAssignment {
+                        principal: principal_email.clone(),
+                        privileges: privs.iter().map(|p| p.as_casbin_str().to_string()).collect(),
+                    }]
                 }
             }
             None => vec![],
         }
     } else {
-        // All principals on this resource
         let grants = state.authorizer.list_grants_on_resource(resource_id).await?;
-        // Resolve UUIDs back to emails for the response
-        let mut result = Vec::new();
-        for (principal_id, privs) in grants {
-            let email = match UserRepo::get_by_id(&state.pool, principal_id).await {
-                Ok(u) => u.email.unwrap_or(u.name),
-                Err(_) => principal_id.to_string(),
-            };
-            result.push((principal_id, privs, email));
-        }
-        result
+        grants_to_assignments(&state.pool, grants).await?
     };
-
-    let privilege_assignments = grants.into_iter().map(|(_, privs, email)| PrivilegeAssignment {
-        principal: email,
-        privileges: privs.iter().map(|p| p.as_casbin_str().to_string()).collect(),
-    }).collect();
 
     Ok(Json(PermissionsList {
         securable_type: Some(securable_type.to_uppercase()),
@@ -120,33 +127,20 @@ pub async fn update(
             .ok_or_else(|| UcError::not_found("User", &change.principal))?;
 
         for priv_str in &change.add {
-            if let Some(p) = Privilege::from_casbin_str(priv_str) {
-                state.authorizer.grant(user.id, resource_id, p).await?;
-            }
+            let p = Privilege::from_casbin_str(priv_str)
+                .ok_or_else(|| UcError::invalid_argument(format!("Unknown privilege: '{}'", priv_str)))?;
+            state.authorizer.grant(user.id, resource_id, p).await?;
         }
         for priv_str in &change.remove {
-            if let Some(p) = Privilege::from_casbin_str(priv_str) {
-                state.authorizer.revoke(user.id, resource_id, p).await?;
-            }
+            let p = Privilege::from_casbin_str(priv_str)
+                .ok_or_else(|| UcError::invalid_argument(format!("Unknown privilege: '{}'", priv_str)))?;
+            state.authorizer.revoke(user.id, resource_id, p).await?;
         }
     }
 
     // Return the updated state
     let grants = state.authorizer.list_grants_on_resource(resource_id).await?;
-    let privilege_assignments = {
-        let mut result = Vec::new();
-        for (principal_id, privs) in grants {
-            let email = match UserRepo::get_by_id(&state.pool, principal_id).await {
-                Ok(u) => u.email.unwrap_or(u.name),
-                Err(_) => principal_id.to_string(),
-            };
-            result.push(PrivilegeAssignment {
-                principal: email,
-                privileges: privs.iter().map(|p| p.as_casbin_str().to_string()).collect(),
-            });
-        }
-        result
-    };
+    let privilege_assignments = grants_to_assignments(&state.pool, grants).await?;
 
     Ok(Json(PermissionsList {
         securable_type: Some(securable_type.to_uppercase()),

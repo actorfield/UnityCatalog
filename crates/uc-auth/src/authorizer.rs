@@ -50,7 +50,7 @@ impl UcAuthorizer {
 
     /// Initialize with a DB-backed adapter so policies survive restarts.
     /// Loads existing policies from `casbin_rule` table on startup.
-    pub async fn new_with_db(pool: sqlx::SqlitePool) -> Result<Self, UcError> {
+    pub async fn new_with_db(pool: uc_db::AnyPool) -> Result<Self, UcError> {
         use casbin::DefaultModel;
         use crate::db_adapter::SqlxAdapter;
 
@@ -174,6 +174,7 @@ impl Authorizer for AllowingAuthorizer {
     async fn revoke(&self, _p: Uuid, _r: Uuid, _priv: Privilege) -> Result<(), UcError> { Ok(()) }
     async fn add_hierarchy_child(&self, _parent: Uuid, _child: Uuid) -> Result<(), UcError> { Ok(()) }
     async fn remove_hierarchy_children(&self, _r: Uuid) -> Result<(), UcError> { Ok(()) }
-    async fn list_privileges(&self, _p: Uuid, _r: Uuid) -> Result<Vec<Privilege>, UcError> { Ok(vec![Privilege::Owner]) }
+    // No-auth mode has no policy data — return empty rather than fabricating OWNER grants
+    async fn list_privileges(&self, _p: Uuid, _r: Uuid) -> Result<Vec<Privilege>, UcError> { Ok(vec![]) }
     async fn list_grants_on_resource(&self, _r: Uuid) -> Result<Vec<(Uuid, Vec<Privilege>)>, UcError> { Ok(vec![]) }
 }
