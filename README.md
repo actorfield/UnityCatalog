@@ -21,7 +21,8 @@ unitycatalog-rs/
 │   └── postgres/        DDL for PostgreSQL
 ├── ui/                  React frontend (proxy → server on :8080)
 ├── tests/python/        Pytest integration tests
-└── seed.py              Seeds sample data (unity catalog + default schema)
+├── scripts/
+│   └── seed.py          Seeds sample data (unity catalog + default schema)
 ```
 
 ## Stack
@@ -63,9 +64,9 @@ RSA keys are generated automatically on first start under `--config-dir`.
 ### 3. Seed sample data
 
 ```bash
-python3 seed.py
+python3 scripts/seed.py
 # or against a different host:
-python3 seed.py http://localhost:8080
+python3 scripts/seed.py http://localhost:8080
 ```
 
 This creates: catalog `unity`, schema `default`, tables (marksheet, numbers, user_countries), volumes (txt_files, json_files), functions (sum, lowercase).
