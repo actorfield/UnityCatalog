@@ -32,15 +32,23 @@ pub async fn create(State(state): State<AppState>, Extension(claims): Extension<
     Ok(Json(to_cred_info(created)))
 }
 
-pub async fn list(State(state): State<AppState>, Query(params): Query<ListParams>) -> Result<Json<ListCredentialsResponse>, UcError> {
+pub async fn list(State(state): State<AppState>, Extension(claims): Extension<Arc<UcClaims>>, Query(params): Query<ListParams>) -> Result<Json<ListCredentialsResponse>, UcError> {
+    if state.auth_enabled {
+        let user = get_user(&state, &claims.sub).await?;
+        require_any(&state, user.id, state.metastore_id, &[Privilege::Owner, Privilege::CreateStorageCredential]).await?;
+    }
     let max = params.max_results.unwrap_or(50).min(1000);
     let (rows, next_token) = CredentialRepo::list(&state.pool, params.page_token.as_deref(), max).await?;
     let credentials = rows.into_iter().map(to_cred_info).collect();
     Ok(Json(ListCredentialsResponse { credentials, next_page_token: next_token }))
 }
 
-pub async fn get(State(state): State<AppState>, Path(name): Path<String>) -> Result<Json<CredentialInfo>, UcError> {
+pub async fn get(State(state): State<AppState>, Extension(claims): Extension<Arc<UcClaims>>, Path(name): Path<String>) -> Result<Json<CredentialInfo>, UcError> {
     let row = CredentialRepo::get_by_name(&state.pool, &name).await?;
+    if state.auth_enabled {
+        let user = get_user(&state, &claims.sub).await?;
+        require_any(&state, user.id, state.metastore_id, &[Privilege::Owner, Privilege::CreateStorageCredential]).await?;
+    }
     Ok(Json(to_cred_info(row)))
 }
 
@@ -78,7 +86,8 @@ pub async fn delete(State(state): State<AppState>, Extension(claims): Extension<
 
 fn to_cred_info(r: CredentialRow) -> CredentialInfo {
     let aws: Option<AwsIamRoleRequest> = serde_json::from_str(&r.credential).ok();
+    let full_name = Some(r.name.clone());
     CredentialInfo { id: r.id, name: r.name, purpose: CredentialPurpose::AwsIamRole,
-        comment: r.comment, owner: r.owner, created_at: Some(r.created_at), created_by: r.created_by,
+        full_name, comment: r.comment, owner: r.owner, created_at: Some(r.created_at), created_by: r.created_by,
         updated_at: r.updated_at, updated_by: r.updated_by, aws_iam_role: aws }
 }

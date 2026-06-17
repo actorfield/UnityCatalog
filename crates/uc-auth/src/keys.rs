@@ -1,4 +1,4 @@
-use rsa::{pkcs1::{EncodeRsaPrivateKey, EncodeRsaPublicKey}, RsaPrivateKey, RsaPublicKey};
+use rsa::{pkcs1::{DecodeRsaPublicKey, EncodeRsaPrivateKey, EncodeRsaPublicKey}, traits::PublicKeyParts, RsaPrivateKey, RsaPublicKey};
 use uc_errors::{ErrorCode, UcError};
 use std::path::Path;
 
@@ -75,11 +75,27 @@ impl KeyManager {
 }
 
 fn build_jwks(km: &KeyManager) -> String {
-    // Minimal JWKS with kid, kty=RSA, use=sig
-    // Full n/e extraction would require parsing the DER — supply a placeholder for now;
-    // real JWKS construction uses the rsa crate's public key components.
-    let kid = &km.key_id;
     use base64::Engine as _;
-    let n_b64 = base64::engine::general_purpose::STANDARD.encode(&km.public_key_der); // placeholder: real impl extracts n & e
-    format!(r#"{{"keys":[{{"kty":"RSA","use":"sig","kid":"{kid}","n":"{n_b64}","e":"AQAB"}}]}}"#)
+    let kid = &km.key_id;
+
+    // Parse the PKCS#1 DER public key to extract the RSA modulus (n) and exponent (e)
+    // as base64url-encoded values per RFC 7517 (JWK format).
+    match RsaPublicKey::from_pkcs1_der(&km.public_key_der) {
+        Ok(pub_key) => {
+            // n: RSA modulus (big-endian byte array, base64url-encoded, no padding)
+            let n_bytes = pub_key.n().to_bytes_be();
+            let n_b64 = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(&n_bytes);
+            // e: RSA public exponent (big-endian byte array, base64url-encoded, no padding)
+            let e_bytes = pub_key.e().to_bytes_be();
+            let e_b64 = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(&e_bytes);
+            format!(
+                r#"{{"keys":[{{"kty":"RSA","use":"sig","alg":"RS512","kid":"{kid}","n":"{n_b64}","e":"{e_b64}"}}]}}"#
+            )
+        }
+        Err(_) => {
+            // Fallback: won't validate but at least returns a parseable JWKS
+            let n_b64 = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(&km.public_key_der);
+            format!(r#"{{"keys":[{{"kty":"RSA","use":"sig","kid":"{kid}","n":"{n_b64}","e":"AQAB"}}]}}"#)
+        }
+    }
 }

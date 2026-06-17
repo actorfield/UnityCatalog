@@ -17,6 +17,12 @@ pub async fn create(State(state): State<AppState>, Extension(claims): Extension<
         require_any(&state, user.id, state.metastore_id, &[Privilege::Owner, Privilege::CreateExternalLocation]).await?;
     }
     let cred = CredentialRepo::get_by_name(&state.pool, &req.credential_name).await?;
+    // Also require OWNER or CREATE_EXTERNAL_LOCATION on the referenced credential
+    if state.auth_enabled {
+        if let Some(ref user_val) = uc_db::repos::UserRepo::get_by_email(&state.pool, &claims.sub).await? {
+            require_any(&state, user_val.id, cred.id, &[uc_types::Privilege::Owner, uc_types::Privilege::CreateExternalLocation]).await?;
+        }
+    }
     let id = Uuid::new_v4();
     let row = ExternalLocationRow { id, name: req.name.clone(), url: req.url.clone(),
         comment: req.comment.clone(), owner: None, credential_id: cred.id,

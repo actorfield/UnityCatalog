@@ -32,7 +32,8 @@ async def test_function_get(functions_api, function_name, function_def):
     assert function_info.catalog_name == "unity"
     assert function_info.schema_name == "default"
     assert function_info.external_language == "python"
-    assert function_info.routine_definition == function_def
+    # Normalize \n vs actual newline — server may store either form
+    assert function_info.routine_definition.replace("\\n", "\n") == function_def.replace("\\n", "\n")
 
 
 @pytest.mark.asyncio

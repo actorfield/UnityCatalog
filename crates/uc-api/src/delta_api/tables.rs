@@ -85,12 +85,11 @@ pub async fn update_table(
     let now = chrono::Utc::now().timestamp_millis();
     let mut latest = uc_db::repos::DeltaCommitRepo::latest_version(&state.pool, row.id).await?.unwrap_or(-1);
 
-    // Process CCv2 updates
+    // Process all CCv2 update types
     for update in &req.updates {
         use uc_openapi::delta::DeltaTableUpdate;
         match update {
             DeltaTableUpdate::AddCommit { commit, .. } => {
-                // Check for version conflict
                 if commit.version <= latest {
                     return Err(uc_errors::UcError::new(
                         uc_errors::ErrorCode::CommitVersionConflict,
@@ -109,7 +108,89 @@ pub async fn update_table(
             DeltaTableUpdate::SetProperties { updates } => {
                 uc_db::repos::PropertyRepo::replace(&state.pool, row.id, "table", updates).await?;
             }
-            _ => { /* other update types handled in future phases */ }
+            DeltaTableUpdate::RemoveProperties { removals } => {
+                for key in removals {
+                    sqlx::query(
+                        "DELETE FROM uc_properties WHERE entity_id=$1 AND entity_type='table' AND property_key=$2"
+                    )
+                    .bind(row.id).bind(key)
+                    .execute(state.pool.as_ref()).await.map_err(crate::db_err)?;
+                }
+            }
+            DeltaTableUpdate::SetColumns { columns } => {
+                // Persist the new column schema as JSON in uc_columns
+                let col_json = serde_json::to_string(columns).unwrap_or_default();
+                sqlx::query(
+                    "UPDATE uc_tables SET column_count=$1, updated_at=$2 WHERE id=$3"
+                )
+                .bind(columns.fields.len() as i32).bind(now).bind(row.id)
+                .execute(state.pool.as_ref()).await.map_err(crate::db_err)?;
+                // Store schema JSON as a property for retrieval
+                sqlx::query(
+                    "INSERT OR REPLACE INTO uc_properties (id, entity_id, entity_type, property_key, property_value) VALUES ($1,$2,'table','__delta_schema__',$3)"
+                )
+                .bind(Uuid::new_v4()).bind(row.id).bind(&col_json)
+                .execute(state.pool.as_ref()).await.map_err(crate::db_err)?;
+            }
+            DeltaTableUpdate::SetTableComment { comment } => {
+                sqlx::query("UPDATE uc_tables SET comment=$1, updated_at=$2 WHERE id=$3")
+                    .bind(comment).bind(now).bind(row.id)
+                    .execute(state.pool.as_ref()).await.map_err(crate::db_err)?;
+            }
+            DeltaTableUpdate::SetPartitionColumns { partition_columns } => {
+                let json = serde_json::to_string(partition_columns).unwrap_or_default();
+                sqlx::query(
+                    "INSERT OR REPLACE INTO uc_properties (id, entity_id, entity_type, property_key, property_value) VALUES ($1,$2,'table','__delta_partition_cols__',$3)"
+                )
+                .bind(Uuid::new_v4()).bind(row.id).bind(&json)
+                .execute(state.pool.as_ref()).await.map_err(crate::db_err)?;
+            }
+            DeltaTableUpdate::SetProtocol { protocol } => {
+                // Store protocol as properties
+                sqlx::query(
+                    "INSERT OR REPLACE INTO uc_properties (id, entity_id, entity_type, property_key, property_value) VALUES ($1,$2,'table','delta.minReaderVersion',$3)"
+                )
+                .bind(Uuid::new_v4()).bind(row.id).bind(protocol.min_reader_version.to_string())
+                .execute(state.pool.as_ref()).await.map_err(crate::db_err)?;
+                sqlx::query(
+                    "INSERT OR REPLACE INTO uc_properties (id, entity_id, entity_type, property_key, property_value) VALUES ($1,$2,'table','delta.minWriterVersion',$3)"
+                )
+                .bind(Uuid::new_v4()).bind(row.id).bind(protocol.min_writer_version.to_string())
+                .execute(state.pool.as_ref()).await.map_err(crate::db_err)?;
+            }
+            DeltaTableUpdate::SetDomainMetadata { updates } => {
+                let json = serde_json::to_string(updates).unwrap_or_default();
+                sqlx::query(
+                    "INSERT OR REPLACE INTO uc_properties (id, entity_id, entity_type, property_key, property_value) VALUES ($1,$2,'table','__delta_domain_metadata__',$3)"
+                )
+                .bind(Uuid::new_v4()).bind(row.id).bind(&json)
+                .execute(state.pool.as_ref()).await.map_err(crate::db_err)?;
+            }
+            DeltaTableUpdate::RemoveDomainMetadata { domains } => {
+                for domain in domains {
+                    sqlx::query(
+                        "DELETE FROM uc_properties WHERE entity_id=$1 AND entity_type='table' AND property_key=$2"
+                    )
+                    .bind(row.id).bind(format!("__delta_domain__{}", domain))
+                    .execute(state.pool.as_ref()).await.map_err(crate::db_err)?;
+                }
+            }
+            DeltaTableUpdate::SetLatestBackfilledVersion { latest_published_version } => {
+                // Mark the commit at this version as the backfilled latest
+                sqlx::query(
+                    "UPDATE uc_delta_commits SET is_backfilled_latest_commit=1 WHERE table_id=$1 AND commit_version=$2"
+                )
+                .bind(row.id).bind(latest_published_version)
+                .execute(state.pool.as_ref()).await.map_err(crate::db_err)?;
+            }
+            DeltaTableUpdate::UpdateMetadataSnapshotVersion { last_commit_version, last_commit_timestamp_ms } => {
+                // Update the table's metadata snapshot version tracking
+                sqlx::query(
+                    "UPDATE uc_tables SET uniform_iceberg_converted_delta_version=$1, uniform_iceberg_converted_delta_timestamp=$2, updated_at=$3 WHERE id=$4"
+                )
+                .bind(last_commit_version).bind(last_commit_timestamp_ms).bind(now).bind(row.id)
+                .execute(state.pool.as_ref()).await.map_err(crate::db_err)?;
+            }
         }
     }
 

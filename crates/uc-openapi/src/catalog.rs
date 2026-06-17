@@ -626,6 +626,8 @@ pub struct CredentialInfo {
     pub name: String,
     pub purpose: CredentialPurpose,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub full_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub comment: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub owner: Option<String>,
@@ -874,6 +876,12 @@ pub struct CommitInfo {
     pub timestamp: i64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub operation: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub file_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub file_size: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub file_modification_timestamp: Option<i64>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]

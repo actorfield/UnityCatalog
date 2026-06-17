@@ -64,6 +64,17 @@ pub async fn get_path_credentials(
     let url = params.path.unwrap_or_default();
     let scheme = UriScheme::from_url(&url);
     let ctx = CredentialContext { scheme, locations: vec![url.clone()], operation: CredentialOperation::ReadWrite, table_id: None, credential_json: None, role_arn: None, external_id: None };
-    let _creds = state.credential_vendor.vend(&ctx).await?;
-    Ok(Json(DeltaCredentialsResponse { storage_credentials: vec![] }))
+    let creds = state.credential_vendor.vend(&ctx).await?;
+    let storage_creds = if let Some(aws) = creds.aws_temp_credentials {
+        vec![DeltaStorageCredential {
+            prefix: url, operation: DeltaCredentialOperation::ReadWrite,
+            config: Some(serde_json::json!({
+                "awsAccessKey": aws.access_key_id,
+                "awsSecretKey": aws.secret_access_key,
+                "awsSessionToken": aws.session_token,
+            })),
+            expiration_time_ms: None,
+        }]
+    } else { vec![] };
+    Ok(Json(DeltaCredentialsResponse { storage_credentials: storage_creds }))
 }

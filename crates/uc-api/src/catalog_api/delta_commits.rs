@@ -27,6 +27,8 @@ pub async fn get_commits(State(state): State<AppState>, Query(params): Query<Get
     let latest = DeltaCommitRepo::latest_version(&state.pool, table.id).await?.unwrap_or(-1);
     let commits_info = commits.into_iter().map(|c| CommitInfo {
         version: c.commit_version, timestamp: c.commit_timestamp, operation: None,
+        file_name: Some(c.commit_filename), file_size: Some(c.commit_filesize),
+        file_modification_timestamp: Some(c.commit_file_modification_timestamp),
     }).collect();
     Ok(Json(GetCommitsResponse { commits_info, latest_table_version: latest }))
 }
@@ -50,7 +52,12 @@ pub async fn commit(State(state): State<AppState>, Json(req): Json<CommitRequest
 
     let latest = DeltaCommitRepo::latest_version(&state.pool, table.id).await?.unwrap_or(-1);
     Ok(Json(GetCommitsResponse {
-        commits_info: vec![CommitInfo { version: req.version, timestamp: req.timestamp, operation: None }],
+        commits_info: vec![CommitInfo {
+            version: req.version, timestamp: req.timestamp, operation: None,
+            file_name: row.commit_filename.clone().into(),
+            file_size: Some(row.commit_filesize),
+            file_modification_timestamp: Some(row.commit_file_modification_timestamp),
+        }],
         latest_table_version: latest,
     }))
 }
