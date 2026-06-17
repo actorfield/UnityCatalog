@@ -60,10 +60,18 @@ pub async fn patch_user(State(state): State<AppState>, Path(id): Path<String>) -
 }
 
 pub async fn get_me(State(state): State<AppState>, Extension(claims): Extension<Arc<UcClaims>>) -> Result<Json<UserResource>, UcError> {
-    let user = UserRepo::get_by_email(&state.pool, &claims.sub).await?
-        .ok_or_else(|| UcError::not_found("User", &claims.sub))?;
-    Ok(Json(UserResource { id: Some(user.id.to_string()), user_name: user.name.clone(), display_name: None,
-        emails: None, name: None, active: Some(user.is_enabled()), external_id: user.external_id }))
+    // Try DB lookup first; if no-auth mode and user doesn't exist, return synthetic response
+    match UserRepo::get_by_email(&state.pool, &claims.sub).await? {
+        Some(user) => Ok(Json(UserResource {
+            id: Some(user.id.to_string()), user_name: user.name.clone(), display_name: None,
+            emails: None, name: None, active: Some(user.is_enabled()), external_id: user.external_id,
+        })),
+        None if !state.auth_enabled => Ok(Json(UserResource {
+            id: None, user_name: claims.sub.clone(), display_name: None,
+            emails: None, name: None, active: Some(true), external_id: None,
+        })),
+        None => Err(UcError::not_found("User", &claims.sub)),
+    }
 }
 
 pub async fn patch_me(State(_state): State<AppState>) -> StatusCode { StatusCode::OK }

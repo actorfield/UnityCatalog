@@ -115,6 +115,7 @@ async fn main() -> anyhow::Result<()> {
         jwt_config,
         metastore_id,
         !args.no_auth,
+        args.config_dir.clone(),
     );
 
     // ── 7. Router assembly ────────────────────────────────────────────────────

@@ -13,6 +13,7 @@ pub struct AppState {
     pub jwt_config: Arc<JwtConfig>,
     pub metastore_id: Uuid,
     pub auth_enabled: bool,
+    pub config_dir: std::path::PathBuf,
 }
 
 impl AppState {
@@ -23,6 +24,7 @@ impl AppState {
         jwt_config: JwtConfig,
         metastore_id: Uuid,
         auth_enabled: bool,
+        config_dir: std::path::PathBuf,
     ) -> Self {
         Self {
             pool: Arc::new(pool),
@@ -31,6 +33,7 @@ impl AppState {
             jwt_config: Arc::new(jwt_config),
             metastore_id,
             auth_enabled,
+            config_dir,
         }
     }
 }
