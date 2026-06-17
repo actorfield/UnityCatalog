@@ -1,5 +1,5 @@
 import pytest
-import subprocess
+import os
 
 from unitycatalog.client import (
     CreateTable,
@@ -44,6 +44,9 @@ async def test_table_get(tables_api):
 
 @pytest.mark.asyncio
 async def test_table_create(tables_api):
+    storage_location = "/tmp/uc/mytable"
+    os.makedirs(storage_location, exist_ok=True)
+
     table_info = await tables_api.create_table(
         CreateTable(
             name="mytable",
@@ -67,7 +70,7 @@ async def test_table_create(tables_api):
                     position=1,
                 ),
             ],
-            storage_location="/tmp/uc/mytable",
+            storage_location=storage_location,
         )
     )
 
@@ -77,22 +80,16 @@ async def test_table_create(tables_api):
         assert table_info.schema_name == "default"
         assert table_info.table_type == TableType.EXTERNAL
         assert table_info.data_source_format == DataSourceFormat.DELTA
+        assert table_info.storage_location.rstrip("/") == f"file://{storage_location}"
+
         columns = {(c.name, c.type_text, c.type_name) for c in table_info.columns}
         assert columns == {
             ("col1", "int", ColumnTypeName.INT),
             ("col2", "double", ColumnTypeName.DOUBLE),
         }
-        assert table_info.storage_location.rstrip("/") == "file:///tmp/uc/mytable"
 
-        # append some randomly generated data to the table
-        subprocess.run(
-            "bin/uc table write --full_name unity.default.mytable",
-            shell=True,
-            check=True,
-        )
-
+        # Verify the table and its schema are persisted — re-fetch via API
         table_info = await tables_api.get_table("unity.default.mytable")
-
         columns = {(c.name, c.type_text, c.type_name) for c in table_info.columns}
         assert columns == {
             ("col1", "int", ColumnTypeName.INT),

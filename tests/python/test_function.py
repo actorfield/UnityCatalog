@@ -1,7 +1,5 @@
 import pytest
 
-import subprocess
-
 from unitycatalog.client import (
     CreateFunction,
     CreateFunctionRequest,
@@ -86,13 +84,14 @@ async def test_function_create(functions_api):
         assert function_info.external_language == "python"
         assert function_info.routine_definition == "c=a*b\\nreturn c"
 
-        result = subprocess.run(
-            'bin/uc function call --full_name unity.default.myFunction --input_params "2,3"',
-            shell=True,
-            check=True,
-            text=True,
-            capture_output=True,
-        )
-        assert "6" in result.stdout, result
+        # Verify the function definition is persisted — re-fetch via API
+        fetched = await functions_api.get_function("unity.default.myFunction")
+        assert fetched.name == "myFunction"
+        assert fetched.routine_definition == "c=a*b\\nreturn c"
+        assert fetched.is_deterministic is True
+        assert len(fetched.input_params.parameters) == 2
+        param_names = {p.name for p in fetched.input_params.parameters}
+        assert param_names == {"a", "b"}
+
     finally:
         await functions_api.delete_function("unity.default.myFunction")

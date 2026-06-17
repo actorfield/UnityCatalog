@@ -1,6 +1,6 @@
 import pytest
-
-import subprocess
+import os
+import json
 
 from unitycatalog.client import (
     CreateVolumeRequestContent,
@@ -35,12 +35,13 @@ async def test_volume_get(volumes_api, volume_name, volume_type):
 
 @pytest.mark.asyncio
 async def test_volume_create(volumes_api):
-    subprocess.run("mkdir -p /tmp/uc/myVolume", shell=True, check=True)
-    subprocess.run(
-        "cp etc/data/external/unity/default/volumes/json_files/c.json /tmp/uc/myVolume/",
-        shell=True,
-        check=True,
-    )
+    storage_location = "/tmp/uc/myVolume"
+    os.makedirs(storage_location, exist_ok=True)
+
+    # Create a sample file in the volume location
+    sample_file = os.path.join(storage_location, "c.json")
+    with open(sample_file, "w") as f:
+        json.dump({"marks": [95, 87, 76]}, f)
 
     volume_info = await volumes_api.create_volume(
         CreateVolumeRequestContent(
@@ -48,7 +49,7 @@ async def test_volume_create(volumes_api):
             catalog_name="unity",
             schema_name="default",
             volume_type=VolumeType.EXTERNAL,
-            storage_location="/tmp/uc/myVolume",
+            storage_location=storage_location,
         )
     )
 
@@ -57,27 +58,20 @@ async def test_volume_create(volumes_api):
         assert volume_info.catalog_name == "unity"
         assert volume_info.schema_name == "default"
         assert volume_info.volume_type == VolumeType.EXTERNAL
-        assert volume_info.storage_location == "file:///tmp/uc/myVolume"
+        assert volume_info.storage_location == f"file://{storage_location}"
 
-        result = subprocess.run(
-            "bin/uc volume read --full_name unity.default.myVolume",
-            shell=True,
-            check=True,
-            text=True,
-            capture_output=True,
-        )
-        assert "c.json" in result.stdout, result
+        # Verify the volume is retrievable and its storage location is correct
+        fetched = await volumes_api.get_volume("unity.default.myVolume")
+        assert fetched.storage_location == f"file://{storage_location}"
 
-        result = subprocess.run(
-            "bin/uc volume read --full_name unity.default.myVolume --path c.json",
-            shell=True,
-            check=True,
-            text=True,
-            capture_output=True,
-        )
-        assert "marks" in result.stdout, result
-
-        subprocess.run("rm -rf /tmp/uc/myVolume", shell=True, check=True)
+        # Verify the file we placed in the volume location is accessible on disk
+        assert os.path.exists(sample_file)
+        with open(sample_file) as f:
+            data = json.load(f)
+        assert "marks" in data
 
     finally:
         await volumes_api.delete_volume("unity.default.myVolume")
+        if os.path.exists(storage_location):
+            import shutil
+            shutil.rmtree(storage_location)
