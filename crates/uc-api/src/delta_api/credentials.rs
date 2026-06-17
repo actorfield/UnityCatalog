@@ -40,7 +40,18 @@ pub async fn get_staging_credentials(
     let scheme = UriScheme::from_url(&staging.staging_location);
     let ctx = CredentialContext { scheme, locations: vec![staging.staging_location.clone()], operation: CredentialOperation::ReadWrite, table_id: Some(uid), credential_json: None, role_arn: None, external_id: None };
     let creds = state.credential_vendor.vend(&ctx).await?;
-    Ok(Json(DeltaCredentialsResponse { storage_credentials: vec![] }))
+    let storage_creds = if let Some(aws) = creds.aws_temp_credentials {
+        vec![DeltaStorageCredential {
+            prefix: staging.staging_location.clone(), operation: DeltaCredentialOperation::ReadWrite,
+            config: Some(serde_json::json!({
+                "awsAccessKey": aws.access_key_id,
+                "awsSecretKey": aws.secret_access_key,
+                "awsSessionToken": aws.session_token,
+            })),
+            expiration_time_ms: None,
+        }]
+    } else { vec![] };
+    Ok(Json(DeltaCredentialsResponse { storage_credentials: storage_creds }))
 }
 
 #[derive(serde::Deserialize)]

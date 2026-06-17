@@ -38,9 +38,29 @@ pub async fn get(State(state): State<AppState>, Path(name): Path<String>) -> Res
     Ok(Json(to_ext_loc_info(row, "")))
 }
 
-pub async fn update(State(state): State<AppState>, Extension(claims): Extension<Arc<UcClaims>>, Path(name): Path<String>, Json(_req): Json<UpdateExternalLocation>) -> Result<Json<ExternalLocationInfo>, UcError> {
-    let row = ExternalLocationRepo::get_by_name(&state.pool, &name).await?;
-    Ok(Json(to_ext_loc_info(row, "")))
+pub async fn update(State(state): State<AppState>, Extension(claims): Extension<Arc<UcClaims>>, Path(name): Path<String>, Json(req): Json<UpdateExternalLocation>) -> Result<Json<ExternalLocationInfo>, UcError> {
+    let existing = ExternalLocationRepo::get_by_name(&state.pool, &name).await?;
+    if state.auth_enabled {
+        let user = get_user(&state, &claims.sub).await?;
+        require_any(&state, user.id, existing.id, &[uc_types::Privilege::Owner]).await?;
+    }
+    let effective_name = req.new_name.as_deref().unwrap_or(&name);
+    let now = now_ms();
+    sqlx::query(
+        "UPDATE uc_external_locations SET name=COALESCE($1,name), url=COALESCE($2,url), comment=COALESCE($3,comment), owner=COALESCE($4,owner), updated_at=$5, updated_by=$6 WHERE id=$7"
+    )
+    .bind(req.new_name.as_deref())
+    .bind(req.url.as_deref())
+    .bind(req.comment.as_deref())
+    .bind(req.owner.as_deref())
+    .bind(now)
+    .bind(auth_sub(&state, &claims))
+    .bind(existing.id)
+    .execute(state.pool.as_ref()).await.map_err(crate::db_err)?;
+    let updated = ExternalLocationRepo::get_by_name(&state.pool, effective_name).await?;
+    // Get credential name for response
+    let cred = uc_db::repos::CredentialRepo::get_by_id(&state.pool, updated.credential_id).await?;
+    Ok(Json(to_ext_loc_info(updated, &cred.name)))
 }
 
 pub async fn delete(State(state): State<AppState>, Extension(claims): Extension<Arc<UcClaims>>, Path(name): Path<String>) -> Result<StatusCode, UcError> {

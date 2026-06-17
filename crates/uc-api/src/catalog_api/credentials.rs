@@ -44,9 +44,26 @@ pub async fn get(State(state): State<AppState>, Path(name): Path<String>) -> Res
     Ok(Json(to_cred_info(row)))
 }
 
-pub async fn update(State(state): State<AppState>, Extension(claims): Extension<Arc<UcClaims>>, Path(name): Path<String>, Json(_req): Json<UpdateCredentialRequest>) -> Result<Json<CredentialInfo>, UcError> {
-    let row = CredentialRepo::get_by_name(&state.pool, &name).await?;
-    Ok(Json(to_cred_info(row)))
+pub async fn update(State(state): State<AppState>, Extension(claims): Extension<Arc<UcClaims>>, Path(name): Path<String>, Json(req): Json<UpdateCredentialRequest>) -> Result<Json<CredentialInfo>, UcError> {
+    let existing = CredentialRepo::get_by_name(&state.pool, &name).await?;
+    if state.auth_enabled {
+        let user = get_user(&state, &claims.sub).await?;
+        require_any(&state, user.id, existing.id, &[uc_types::Privilege::Owner]).await?;
+    }
+    let effective_name = req.new_name.as_deref().unwrap_or(&name);
+    let now = now_ms();
+    sqlx::query(
+        "UPDATE uc_credentials SET name=COALESCE($1,name), comment=COALESCE($2,comment), owner=COALESCE($3,owner), updated_at=$4, updated_by=$5 WHERE id=$6"
+    )
+    .bind(req.new_name.as_deref())
+    .bind(req.comment.as_deref())
+    .bind(req.owner.as_deref())
+    .bind(now)
+    .bind(auth_sub(&state, &claims))
+    .bind(existing.id)
+    .execute(state.pool.as_ref()).await.map_err(crate::db_err)?;
+    let updated = CredentialRepo::get_by_name(&state.pool, effective_name).await?;
+    Ok(Json(to_cred_info(updated)))
 }
 
 pub async fn delete(State(state): State<AppState>, Extension(claims): Extension<Arc<UcClaims>>, Path(name): Path<String>) -> Result<StatusCode, UcError> {

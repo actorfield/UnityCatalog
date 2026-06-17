@@ -15,6 +15,10 @@ pub trait Authorizer: Send + Sync {
     async fn revoke(&self, principal: Uuid, resource: Uuid, privilege: Privilege) -> Result<(), UcError>;
     async fn add_hierarchy_child(&self, parent: Uuid, child: Uuid) -> Result<(), UcError>;
     async fn remove_hierarchy_children(&self, resource: Uuid) -> Result<(), UcError>;
+    /// List all privileges a principal has on a specific resource.
+    async fn list_privileges(&self, principal: Uuid, resource: Uuid) -> Result<Vec<Privilege>, UcError>;
+    /// List all (principal, privileges) pairs for a resource.
+    async fn list_grants_on_resource(&self, resource: Uuid) -> Result<Vec<(Uuid, Vec<Privilege>)>, UcError>;
 }
 
 // ── UcAuthorizer (JCasbin-backed) ─────────────────────────────────────────────
@@ -115,6 +119,28 @@ impl Authorizer for UcAuthorizer {
             .map_err(|e| UcError::new(ErrorCode::Internal, format!("Casbin remove hierarchy failed: {}", e)))?;
         Ok(())
     }
+
+    async fn list_privileges(&self, principal: Uuid, resource: Uuid) -> Result<Vec<Privilege>, UcError> {
+        let enforcer = self.enforcer.read().await;
+        let policies = enforcer.get_policy();
+        let privs = policies.iter()
+            .filter(|p| p.len() >= 3 && p[0] == principal.to_string() && p[1] == resource.to_string())
+            .filter_map(|p| Privilege::from_casbin_str(&p[2]))
+            .collect();
+        Ok(privs)
+    }
+
+    async fn list_grants_on_resource(&self, resource: Uuid) -> Result<Vec<(Uuid, Vec<Privilege>)>, UcError> {
+        let enforcer = self.enforcer.read().await;
+        let policies = enforcer.get_policy();
+        let mut map: std::collections::HashMap<Uuid, Vec<Privilege>> = std::collections::HashMap::new();
+        for p in policies.iter().filter(|p| p.len() >= 3 && p[1] == resource.to_string()) {
+            if let (Ok(principal), Some(p_priv)) = (p[0].parse::<Uuid>(), Privilege::from_casbin_str(&p[2])) {
+                map.entry(principal).or_default().push(p_priv);
+            }
+        }
+        Ok(map.into_iter().collect())
+    }
 }
 
 // ── AllowingAuthorizer (auth disabled mode) ───────────────────────────────────
@@ -129,4 +155,6 @@ impl Authorizer for AllowingAuthorizer {
     async fn revoke(&self, _p: Uuid, _r: Uuid, _priv: Privilege) -> Result<(), UcError> { Ok(()) }
     async fn add_hierarchy_child(&self, _parent: Uuid, _child: Uuid) -> Result<(), UcError> { Ok(()) }
     async fn remove_hierarchy_children(&self, _r: Uuid) -> Result<(), UcError> { Ok(()) }
+    async fn list_privileges(&self, _p: Uuid, _r: Uuid) -> Result<Vec<Privilege>, UcError> { Ok(vec![Privilege::Owner]) }
+    async fn list_grants_on_resource(&self, _r: Uuid) -> Result<Vec<(Uuid, Vec<Privilege>)>, UcError> { Ok(vec![]) }
 }

@@ -143,13 +143,25 @@ pub async fn get_version(State(state): State<AppState>, Path((full_name, version
     Ok(Json(to_version_info(row, cat, sch, mdl)))
 }
 
-pub async fn update_version(State(state): State<AppState>, Path((full_name, version)): Path<(String, String)>, Json(_req): Json<UpdateModelVersion>) -> Result<Json<ModelVersionInfo>, UcError> {
+pub async fn update_version(State(state): State<AppState>, Extension(claims): Extension<Arc<UcClaims>>, Path((full_name, version)): Path<(String, String)>, Json(req): Json<UpdateModelVersion>) -> Result<Json<ModelVersionInfo>, UcError> {
     let (cat, sch, mdl) = split3(&full_name)?;
     let schema = SchemaRepo::get_by_full_name(&state.pool, cat, sch).await?;
     let model = ModelRepo::get_model_by_schema_and_name(&state.pool, schema.id, mdl).await?;
     let ver: i32 = version.parse().map_err(|_| UcError::invalid_argument("version must be an integer"))?;
     let row = ModelRepo::get_version(&state.pool, model.id, ver).await?;
-    Ok(Json(to_version_info(row, cat, sch, mdl)))
+    if state.auth_enabled {
+        let user = get_user(&state, &claims.sub).await?;
+        require_any(&state, user.id, model.id, &[Privilege::Owner]).await?;
+    }
+    let now = now_ms();
+    sqlx::query("UPDATE uc_model_versions SET comment=COALESCE($1,comment), updated_at=$2, updated_by=$3 WHERE id=$4")
+        .bind(req.comment.as_deref())
+        .bind(now)
+        .bind(auth_sub(&state, &claims))
+        .bind(row.id)
+        .execute(state.pool.as_ref()).await.map_err(crate::db_err)?;
+    let updated = ModelRepo::get_version(&state.pool, model.id, ver).await?;
+    Ok(Json(to_version_info(updated, cat, sch, mdl)))
 }
 
 pub async fn delete_version(State(state): State<AppState>, Path((full_name, version)): Path<(String, String)>) -> Result<StatusCode, UcError> {

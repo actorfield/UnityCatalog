@@ -3,7 +3,7 @@ use std::sync::Arc;
 use uc_auth::UcClaims;
 use uc_db::repos::UserRepo;
 use uc_errors::UcError;
-use uc_openapi::control::{UserResource, UserResourceList};
+use uc_openapi::control::{ScimPatchOp, UserResource, UserResourceList};
 use uuid::Uuid;
 use crate::state::AppState;
 
@@ -55,8 +55,26 @@ pub async fn delete_user(State(state): State<AppState>, Path(id): Path<String>) 
     Ok(StatusCode::NO_CONTENT)
 }
 
-pub async fn patch_user(State(state): State<AppState>, Path(id): Path<String>) -> Result<StatusCode, UcError> {
-    Ok(StatusCode::OK)
+pub async fn patch_user(State(state): State<AppState>, Path(id): Path<String>, Json(req): Json<ScimPatchOp>) -> Result<Json<UserResource>, UcError> {
+    let uid: Uuid = id.parse().map_err(|_| UcError::invalid_argument("invalid user id"))?;
+    // Process SCIM PATCH operations: replace active/userName fields
+    let mut new_name: Option<String> = None;
+    let mut new_state: Option<String> = None;
+    for op in &req.operations {
+        if op.op.to_lowercase() == "replace" {
+            if let Some(ref val) = op.value {
+                if let Some(active) = val.get("active").and_then(|v| v.as_bool()) {
+                    new_state = Some(if active { "ENABLED".into() } else { "DISABLED".into() });
+                }
+                if let Some(name) = val.get("userName").and_then(|v| v.as_str()) {
+                    new_name = Some(name.to_string());
+                }
+            }
+        }
+    }
+    let row = UserRepo::update(&state.pool, uid, new_name.as_deref(), None, new_state.as_deref(), chrono::Utc::now().timestamp_millis()).await?;
+    Ok(Json(UserResource { id: Some(row.id.to_string()), user_name: row.name.clone(), display_name: None,
+        emails: None, name: None, active: Some(row.is_enabled()), external_id: row.external_id }))
 }
 
 pub async fn get_me(State(state): State<AppState>, Extension(claims): Extension<Arc<UcClaims>>) -> Result<Json<UserResource>, UcError> {
@@ -74,4 +92,22 @@ pub async fn get_me(State(state): State<AppState>, Extension(claims): Extension<
     }
 }
 
-pub async fn patch_me(State(_state): State<AppState>) -> StatusCode { StatusCode::OK }
+pub async fn patch_me(State(state): State<AppState>, Extension(claims): Extension<Arc<UcClaims>>, Json(req): Json<ScimPatchOp>) -> Result<Json<UserResource>, UcError> {
+    // Apply SCIM PATCH to the current user
+    if let Some(user) = UserRepo::get_by_email(&state.pool, &claims.sub).await? {
+        let mut new_state: Option<String> = None;
+        for op in &req.operations {
+            if op.op.to_lowercase() == "replace" {
+                if let Some(ref val) = op.value {
+                    if let Some(active) = val.get("active").and_then(|v| v.as_bool()) {
+                        new_state = Some(if active { "ENABLED".into() } else { "DISABLED".into() });
+                    }
+                }
+            }
+        }
+        let updated = UserRepo::update(&state.pool, user.id, None, None, new_state.as_deref(), chrono::Utc::now().timestamp_millis()).await?;
+        return Ok(Json(UserResource { id: Some(updated.id.to_string()), user_name: updated.name.clone(), display_name: None,
+            emails: None, name: None, active: Some(updated.is_enabled()), external_id: updated.external_id }));
+    }
+    Err(UcError::not_found("User", &claims.sub))
+}

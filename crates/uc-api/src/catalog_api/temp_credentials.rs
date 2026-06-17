@@ -60,10 +60,17 @@ pub async fn volume_credentials(
 }
 
 pub async fn model_version_credentials(
-    State(_state): State<AppState>,
-    Json(_req): Json<GenerateTemporaryModelVersionCredential>,
+    State(state): State<AppState>,
+    Extension(claims): Extension<Arc<UcClaims>>,
+    Json(req): Json<GenerateTemporaryModelVersionCredential>,
 ) -> Result<Json<TemporaryCredentials>, UcError> {
-    Ok(Json(TemporaryCredentials::default()))
+    use uc_db::repos::{ModelRepo, SchemaRepo};
+    let schema = SchemaRepo::get_by_full_name(&state.pool, &req.catalog_name, &req.schema_name).await?;
+    let model = ModelRepo::get_model_by_schema_and_name(&state.pool, schema.id, &req.model_name).await?;
+    let version = ModelRepo::get_version(&state.pool, model.id, req.version as i32).await?;
+    let url = version.url.or(model.url).unwrap_or_default();
+    let ctx = build_ctx(&url, CredentialOperation::ReadWrite, None, &state).await?;
+    Ok(Json(state.credential_vendor.vend(&ctx).await?))
 }
 
 /// Fix for issue #1160: authorize against the matched external location's privilege
