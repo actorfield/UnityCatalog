@@ -29,7 +29,7 @@ pub async fn create(
     if state.auth_enabled {
         let user = UserRepo::get_by_email(&state.pool, &claims.sub).await?
             .ok_or_else(|| UcError::unauthenticated("User not found"))?;
-        let allowed = state.authorizer.authorize(user.id, state.metastore_id, Privilege::CreateCatalog).await?;
+        let allowed = state.authorizer.authorize_any(user.id, state.metastore_id, &[Privilege::CreateCatalog, Privilege::Owner]).await?;
         if !allowed {
             return Err(UcError::permission_denied("CREATE CATALOG privilege required on metastore"));
         }

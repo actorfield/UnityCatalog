@@ -60,18 +60,20 @@ pub async fn auth_middleware(
         Err(e) => return error_into_response(e, ErrorFormat::Catalog),
     };
 
-    // Validate user exists and is enabled
-    match UserRepo::get_by_email(&state.pool, &claims.sub).await {
-        Ok(Some(user)) if user.is_enabled() => {}
-        Ok(Some(_)) => {
-            let err = UcError::unauthenticated("User account is disabled");
-            return error_into_response(err, ErrorFormat::Catalog);
+    // SERVICE tokens bypass user DB lookup — they represent the server itself
+    if claims.token_type != uc_types::TokenType::Service {
+        match UserRepo::get_by_email(&state.pool, &claims.sub).await {
+            Ok(Some(user)) if user.is_enabled() => {}
+            Ok(Some(_)) => {
+                let err = UcError::unauthenticated("User account is disabled");
+                return error_into_response(err, ErrorFormat::Catalog);
+            }
+            Ok(None) => {
+                let err = UcError::unauthenticated(format!("User '{}' not found", claims.sub));
+                return error_into_response(err, ErrorFormat::Catalog);
+            }
+            Err(e) => return error_into_response(e, ErrorFormat::Catalog),
         }
-        Ok(None) => {
-            let err = UcError::unauthenticated(format!("User '{}' not found", claims.sub));
-            return error_into_response(err, ErrorFormat::Catalog);
-        }
-        Err(e) => return error_into_response(e, ErrorFormat::Catalog),
     }
 
     req.extensions_mut().insert(Arc::new(claims));

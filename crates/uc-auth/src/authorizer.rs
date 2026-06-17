@@ -31,9 +31,7 @@ impl UcAuthorizer {
     /// The casbin model is embedded from the file copied from the Java project.
     const MODEL: &'static str = include_str!("../resources/jcasbin_auth_model.conf");
 
-    /// Initialize with an in-memory adapter. Policies are loaded from the DB on startup
-    /// and written back on each grant/revoke. A persistent DB adapter (casbin-sqlx-adapter)
-    /// can replace this in a future phase.
+    /// Initialize with an in-memory adapter (for testing).
     pub async fn new_in_memory() -> Result<Self, UcError> {
         use casbin::{DefaultModel, MemoryAdapter};
 
@@ -42,6 +40,27 @@ impl UcAuthorizer {
             .map_err(|e| UcError::new(ErrorCode::Internal, format!("Casbin model load failed: {}", e)))?;
 
         let adapter = MemoryAdapter::default();
+
+        let enforcer = Enforcer::new(model, adapter)
+            .await
+            .map_err(|e| UcError::new(ErrorCode::Internal, format!("Casbin enforcer init failed: {}", e)))?;
+
+        Ok(Self { enforcer: Arc::new(RwLock::new(enforcer)) })
+    }
+
+    /// Initialize with a DB-backed adapter so policies survive restarts.
+    /// Loads existing policies from `casbin_rule` table on startup.
+    pub async fn new_with_db(pool: sqlx::SqlitePool) -> Result<Self, UcError> {
+        use casbin::DefaultModel;
+        use crate::db_adapter::SqlxAdapter;
+
+        let model = DefaultModel::from_str(Self::MODEL)
+            .await
+            .map_err(|e| UcError::new(ErrorCode::Internal, format!("Casbin model load failed: {}", e)))?;
+
+        let adapter = SqlxAdapter::new(pool)
+            .await
+            .map_err(|e| UcError::new(ErrorCode::Internal, format!("Casbin DB adapter init failed: {}", e)))?;
 
         let enforcer = Enforcer::new(model, adapter)
             .await

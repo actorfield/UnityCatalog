@@ -9,7 +9,7 @@ use uc_api::{
     middleware::auth_middleware,
     state::AppState,
 };
-use uc_auth::{AllowingAuthorizer, JwtConfig, KeyManager};
+use uc_auth::{AllowingAuthorizer, JwtConfig, KeyManager, UcAuthorizer};
 use uc_credentials::CloudCredentialVendor;
 use uc_db::{pool::run_migrations, AnyPool, repos::{MetastoreRepo, UserRepo}};
 use uuid::Uuid;
@@ -67,6 +67,15 @@ async fn main() -> anyhow::Result<()> {
         key_manager.key_id.clone(),
     ).context("Failed to create JWT config")?;
 
+    // Write service token — uses the admin email as sub so auth-enabled handlers
+    // can resolve it to the admin user who has OWNER on the metastore
+    let admin_email = "admin@unitycatalog.io";
+    let service_claims = uc_auth::jwt::UcClaims::new_access(admin_email);
+    let service_token = uc_auth::jwt::encode_token(&jwt_config, &service_claims)
+        .context("Failed to create service token")?;
+    std::fs::write(args.config_dir.join("token.txt"), &service_token)
+        .context("Failed to write service token")?;
+
     // ── 2. Database pool + migrations ─────────────────────────────────────────
     std::fs::create_dir_all("./etc/db").ok();
     let pool = AnyPool::connect(&args.database_url)
@@ -91,10 +100,11 @@ async fn main() -> anyhow::Result<()> {
         info!("Authorization disabled — all requests allowed");
         Arc::new(AllowingAuthorizer)
     } else {
-        info!("Authorization enabled (casbin)");
-        // TODO: initialize UcAuthorizer with pool when casbin adapter is wired
-        // For now fall back to AllowingAuthorizer until casbin adapter crate is confirmed
-        Arc::new(AllowingAuthorizer)
+        info!("Authorization enabled — loading casbin policies from DB");
+        let uc_auth = UcAuthorizer::new_with_db(pool.clone())
+            .await
+            .context("Failed to initialize casbin authorizer")?;
+        Arc::new(uc_auth)
     };
 
     // ── 5. Admin user initialization ──────────────────────────────────────────

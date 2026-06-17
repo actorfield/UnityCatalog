@@ -12,7 +12,8 @@ pub struct ListParams { pub filter: Option<String>, pub start_index: Option<i32>
 
 pub async fn create_user(State(state): State<AppState>, Json(req): Json<UserResource>) -> Result<Json<UserResource>, UcError> {
     let id = Uuid::new_v4(); let now = chrono::Utc::now().timestamp_millis();
-    let email = req.emails.as_ref().and_then(|e| e.first()).map(|e| e.value.as_str());
+    let email_from_list = req.emails.as_ref().and_then(|e| e.first()).map(|e| e.value.clone());
+    let email = email_from_list.as_deref().or(Some(req.user_name.as_str()));
     let row = UserRepo::create(&state.pool, id, &req.user_name, email, req.external_id.as_deref(),
         if req.active.unwrap_or(true) { "ENABLED" } else { "DISABLED" }, now).await?;
     Ok(Json(UserResource { id: Some(row.id.to_string()), user_name: row.name.clone(),
