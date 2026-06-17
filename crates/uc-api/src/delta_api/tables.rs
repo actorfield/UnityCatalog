@@ -9,8 +9,6 @@ use uc_openapi::delta::{
 use uuid::Uuid;
 use crate::state::AppState;
 
-pub async fn get_config(State(_s): State<AppState>) -> Result<StatusCode, UcError> { Ok(StatusCode::NOT_IMPLEMENTED) }
-
 pub async fn create_staging_table(
     State(state): State<AppState>,
     Path((catalog, schema)): Path<(String, String)>,
