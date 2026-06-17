@@ -145,8 +145,14 @@ pub async fn finalize_version(State(state): State<AppState>, Path((full_name, ve
     let ver: i32 = version.parse().map_err(|_| UcError::invalid_argument("version must be an integer"))?;
     let row = ModelRepo::get_version(&state.pool, model.id, ver).await?;
     // Update status via raw query
+    let status_str = match req.status {
+        ModelVersionStatus::Ready => "READY",
+        ModelVersionStatus::PendingRegistration => "PENDING_REGISTRATION",
+        ModelVersionStatus::FailedRegistration => "FAILED_REGISTRATION",
+        ModelVersionStatus::ModelVersionStatusUnknown => "MODEL_VERSION_STATUS_UNKNOWN",
+    };
     sqlx::query("UPDATE uc_model_versions SET status=$1 WHERE id=$2")
-        .bind(format!("{:?}", req.status).to_uppercase())
+        .bind(status_str)
         .bind(row.id)
         .execute(state.pool.as_ref())
         .await.map_err(crate::db_err)?;
@@ -161,10 +167,19 @@ fn to_model_info(r: RegisteredModelRow, cat: &str, sch: &str) -> RegisteredModel
         updated_by: r.updated_by, id: Some(r.id) }
 }
 
+fn parse_model_status(s: Option<&str>) -> Option<ModelVersionStatus> {
+    match s {
+        Some("READY") => Some(ModelVersionStatus::Ready),
+        Some("PENDING_REGISTRATION") => Some(ModelVersionStatus::PendingRegistration),
+        Some("FAILED_REGISTRATION") => Some(ModelVersionStatus::FailedRegistration),
+        _ => Some(ModelVersionStatus::ModelVersionStatusUnknown),
+    }
+}
+
 fn to_version_info(r: ModelVersionRow, cat: &str, sch: &str, mdl: &str) -> ModelVersionInfo {
     ModelVersionInfo { model_name: Some(mdl.to_string()), catalog_name: Some(cat.to_string()),
         schema_name: Some(sch.to_string()), version: r.version.map(|v| v as i64), source: r.source,
-        run_id: r.run_id, status: Some(ModelVersionStatus::PendingRegistration), storage_location: r.url,
+        run_id: r.run_id, status: parse_model_status(r.status.as_deref()), storage_location: r.url,
         comment: r.comment, created_at: r.created_at, created_by: r.created_by,
         updated_at: r.updated_at, updated_by: r.updated_by, id: Some(r.id) }
 }
