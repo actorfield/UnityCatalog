@@ -30,8 +30,16 @@ pub async fn auth_middleware(
         return next.run(req).await;
     }
 
-    // Skip auth check if disabled
+    // When auth is disabled, inject a dummy service claims so handlers can still extract them
     if !state.auth_enabled {
+        let dummy = Arc::new(UcClaims {
+            sub: "anonymous@unitycatalog.io".to_string(),
+            iss: "internal".to_string(),
+            iat: 0,
+            jti: "disabled".to_string(),
+            token_type: uc_types::TokenType::Service,
+        });
+        req.extensions_mut().insert(dummy);
         return next.run(req).await;
     }
 
