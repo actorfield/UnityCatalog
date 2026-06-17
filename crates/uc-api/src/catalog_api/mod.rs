@@ -1,3 +1,4 @@
+pub mod helpers;
 pub mod catalogs;
 pub mod schemas;
 pub mod tables;

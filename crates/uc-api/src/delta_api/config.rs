@@ -1,4 +1,11 @@
-use axum::{extract::State, http::StatusCode};
-use crate::state::AppState;
+use axum::{extract::State, Json};
 use uc_errors::UcError;
-pub async fn get_config(State(_s): State<AppState>) -> Result<StatusCode, UcError> { Ok(StatusCode::NOT_IMPLEMENTED) }
+use uc_openapi::delta::DeltaCatalogConfig;
+use crate::state::AppState;
+
+pub async fn get_config(State(_state): State<AppState>) -> Result<Json<DeltaCatalogConfig>, UcError> {
+    Ok(Json(DeltaCatalogConfig {
+        endpoints: vec![],
+        protocol_version: "1".to_string(),
+    }))
+}

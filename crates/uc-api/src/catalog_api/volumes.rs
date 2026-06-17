@@ -1,9 +1,81 @@
-// TODO: implement full handler — stub returns 501
-use axum::{extract::{Path, Query, State}, http::StatusCode, Json};
-use crate::state::AppState;
+use axum::{extract::{Path, Query, State}, http::StatusCode, Extension, Json};
+use std::sync::Arc;
+use uc_auth::UcClaims;
+use uc_db::{models::volume::VolumeRow, repos::{SchemaRepo, VolumeRepo}};
 use uc_errors::UcError;
-pub async fn create(State(_s): State<AppState>) -> Result<StatusCode, UcError> { Ok(StatusCode::NOT_IMPLEMENTED) }
-pub async fn list(State(_s): State<AppState>) -> Result<StatusCode, UcError> { Ok(StatusCode::NOT_IMPLEMENTED) }
-pub async fn get(State(_s): State<AppState>, Path(_n): Path<String>) -> Result<StatusCode, UcError> { Ok(StatusCode::NOT_IMPLEMENTED) }
-pub async fn update(State(_s): State<AppState>, Path(_n): Path<String>) -> Result<StatusCode, UcError> { Ok(StatusCode::NOT_IMPLEMENTED) }
-pub async fn delete(State(_s): State<AppState>, Path(_n): Path<String>) -> Result<StatusCode, UcError> { Ok(StatusCode::NOT_IMPLEMENTED) }
+use uc_openapi::catalog::{CreateVolumeRequestContent, ListVolumesResponseContent, UpdateVolumeRequestContent, VolumeInfo, VolumeType};
+use uc_types::Privilege;
+use uuid::Uuid;
+use crate::{catalog_api::helpers::*, state::AppState};
+
+#[derive(serde::Deserialize)]
+pub struct ListParams { pub catalog_name: String, pub schema_name: String, pub max_results: Option<i64>, pub page_token: Option<String> }
+
+pub async fn create(State(state): State<AppState>, Extension(claims): Extension<Arc<UcClaims>>, Json(req): Json<CreateVolumeRequestContent>) -> Result<Json<VolumeInfo>, UcError> {
+    let schema = SchemaRepo::get_by_full_name(&state.pool, &req.catalog_name, &req.schema_name).await?;
+    if state.auth_enabled {
+        let user = get_user(&state, &claims.sub).await?;
+        require_any(&state, user.id, schema.id, &[Privilege::Owner, Privilege::CreateVolume]).await?;
+    }
+    let id = Uuid::new_v4(); let now = now_ms();
+    let row = VolumeRow { id, schema_id: schema.id, name: req.name.clone(), comment: req.comment.clone(),
+        storage_location: req.storage_location.clone(), owner: None, created_at: now,
+        created_by: auth_sub(&state, &claims).map(String::from), updated_at: None, updated_by: None,
+        volume_type: format!("{:?}", req.volume_type).to_uppercase() };
+    let created = VolumeRepo::create(&state.pool, &row).await?;
+    if state.auth_enabled {
+        if let Some(user) = uc_db::repos::UserRepo::get_by_email(&state.pool, &claims.sub).await? {
+            state.authorizer.grant(user.id, id, Privilege::Owner).await?;
+            state.authorizer.add_hierarchy_child(schema.id, id).await?;
+        }
+    }
+    Ok(Json(to_volume_info(created, &req.catalog_name, &req.schema_name)))
+}
+
+pub async fn list(State(state): State<AppState>, Query(params): Query<ListParams>) -> Result<Json<ListVolumesResponseContent>, UcError> {
+    let schema = SchemaRepo::get_by_full_name(&state.pool, &params.catalog_name, &params.schema_name).await?;
+    let max = params.max_results.unwrap_or(50).min(1000);
+    let (rows, next_token) = VolumeRepo::list(&state.pool, schema.id, params.page_token.as_deref(), max).await?;
+    let volumes = rows.into_iter().map(|r| to_volume_info(r, &params.catalog_name, &params.schema_name)).collect();
+    Ok(Json(ListVolumesResponseContent { volumes, next_page_token: next_token }))
+}
+
+pub async fn get(State(state): State<AppState>, Path(full_name): Path<String>) -> Result<Json<VolumeInfo>, UcError> {
+    let (cat, sch, vol) = split3(&full_name)?;
+    let schema = SchemaRepo::get_by_full_name(&state.pool, cat, sch).await?;
+    let row = VolumeRepo::get_by_schema_and_name(&state.pool, schema.id, vol).await?;
+    Ok(Json(to_volume_info(row, cat, sch)))
+}
+
+pub async fn update(State(state): State<AppState>, Extension(claims): Extension<Arc<UcClaims>>, Path(full_name): Path<String>, Json(req): Json<UpdateVolumeRequestContent>) -> Result<Json<VolumeInfo>, UcError> {
+    let (cat, sch, vol) = split3(&full_name)?;
+    let schema = SchemaRepo::get_by_full_name(&state.pool, cat, sch).await?;
+    let existing = VolumeRepo::get_by_schema_and_name(&state.pool, schema.id, vol).await?;
+    if state.auth_enabled {
+        let user = get_user(&state, &claims.sub).await?;
+        require_any(&state, user.id, existing.id, &[Privilege::Owner]).await?;
+    }
+    let row = VolumeRepo::update(&state.pool, existing.id, req.new_name.as_deref(), req.comment.as_deref(), req.owner.as_deref(), now_ms(), auth_sub(&state, &claims)).await?;
+    Ok(Json(to_volume_info(row, cat, sch)))
+}
+
+pub async fn delete(State(state): State<AppState>, Extension(claims): Extension<Arc<UcClaims>>, Path(full_name): Path<String>) -> Result<StatusCode, UcError> {
+    let (cat, sch, vol) = split3(&full_name)?;
+    let schema = SchemaRepo::get_by_full_name(&state.pool, cat, sch).await?;
+    let existing = VolumeRepo::get_by_schema_and_name(&state.pool, schema.id, vol).await?;
+    if state.auth_enabled {
+        let user = get_user(&state, &claims.sub).await?;
+        require_any(&state, user.id, existing.id, &[Privilege::Owner]).await?;
+    }
+    state.authorizer.remove_hierarchy_children(existing.id).await?;
+    VolumeRepo::delete(&state.pool, existing.id).await?;
+    Ok(StatusCode::OK)
+}
+
+fn to_volume_info(r: VolumeRow, cat: &str, sch: &str) -> VolumeInfo {
+    let vt = if r.volume_type == "MANAGED" { VolumeType::Managed } else { VolumeType::External };
+    VolumeInfo { catalog_name: cat.to_string(), schema_name: sch.to_string(), name: r.name.clone(),
+        comment: r.comment, owner: r.owner, created_at: Some(r.created_at), created_by: r.created_by,
+        updated_at: r.updated_at, updated_by: r.updated_by, volume_id: Some(r.id), volume_type: vt,
+        storage_location: r.storage_location, full_name: Some(format!("{}.{}.{}", cat, sch, r.name)) }
+}
