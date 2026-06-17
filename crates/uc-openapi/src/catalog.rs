@@ -1,7 +1,35 @@
 //! Types derived from api/all.yaml — the main Unity Catalog REST API.
-use serde::{Deserialize, Serialize};
+use serde::{de, Deserialize, Deserializer, Serialize};
 use std::collections::HashMap;
 use uuid::Uuid;
+
+/// Deserialize `properties` as either a `HashMap<String,String>` or a JSON string containing one.
+/// The Java client sends `properties: "{}"` (a string), not `properties: {}` (an object).
+pub fn deser_props_or_string<'de, D>(deserializer: D) -> Result<Option<HashMap<String, String>>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum StringOrMap {
+        Map(HashMap<String, String>),
+        Str(String),
+        Null,
+    }
+    match StringOrMap::deserialize(deserializer)? {
+        StringOrMap::Map(m) => Ok(Some(m)),
+        StringOrMap::Str(s) => {
+            if s.trim().is_empty() || s.trim() == "{}" || s.trim() == "\"{}\"" {
+                Ok(Some(HashMap::new()))
+            } else {
+                serde_json::from_str::<HashMap<String, String>>(&s)
+                    .map(Some)
+                    .map_err(de::Error::custom)
+            }
+        }
+        StringOrMap::Null => Ok(None),
+    }
+}
 
 // ── Metastore ─────────────────────────────────────────────────────────────────
 
@@ -408,7 +436,8 @@ pub struct FunctionInfo {
     pub specific_name: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub comment: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    /// Accepts either a JSON map {"k":"v"} or a legacy string "{}" from the Java client.
+    #[serde(skip_serializing_if = "Option::is_none", default, deserialize_with = "deser_props_or_string")]
     pub properties: Option<HashMap<String, String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub full_name: Option<String>,

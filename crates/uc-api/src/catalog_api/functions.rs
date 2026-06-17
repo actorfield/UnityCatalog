@@ -3,7 +3,7 @@ use std::sync::Arc;
 use uc_auth::UcClaims;
 use uc_db::{models::function::{FunctionParamRow, FunctionRow}, repos::{FunctionRepo, SchemaRepo}};
 use uc_errors::UcError;
-use uc_openapi::catalog::{CreateFunctionRequest, FunctionInfo, FunctionParameterInfo, FunctionParameterInfos, ListFunctionsResponse};
+use uc_openapi::catalog::{ColumnTypeName, CreateFunctionRequest, FunctionInfo, FunctionParameterInfo, FunctionParameterInfos, ListFunctionsResponse};
 use uc_types::Privilege;
 use uuid::Uuid;
 use crate::{catalog_api::helpers::*, state::AppState};
@@ -80,13 +80,31 @@ pub async fn delete(State(state): State<AppState>, Extension(claims): Extension<
     Ok(StatusCode::OK)
 }
 
+fn parse_col_type_name(s: &str) -> Option<ColumnTypeName> {
+    match s {
+        "BOOLEAN" => Some(ColumnTypeName::Boolean), "BYTE" => Some(ColumnTypeName::Byte),
+        "SHORT" => Some(ColumnTypeName::Short), "INT" => Some(ColumnTypeName::Int),
+        "LONG" => Some(ColumnTypeName::Long), "FLOAT" => Some(ColumnTypeName::Float),
+        "DOUBLE" => Some(ColumnTypeName::Double), "DATE" => Some(ColumnTypeName::Date),
+        "TIMESTAMP" => Some(ColumnTypeName::Timestamp), "TIMESTAMP_NTZ" => Some(ColumnTypeName::TimestampNtz),
+        "STRING" => Some(ColumnTypeName::String), "BINARY" => Some(ColumnTypeName::Binary),
+        "DECIMAL" => Some(ColumnTypeName::Decimal), "ARRAY" => Some(ColumnTypeName::Array),
+        "STRUCT" => Some(ColumnTypeName::Struct), "MAP" => Some(ColumnTypeName::Map),
+        "NULL" => Some(ColumnTypeName::Null),
+        _ => None,
+    }
+}
+
 fn to_function_info(r: FunctionRow, cat: &str, sch: &str, input: Vec<FunctionParamRow>) -> FunctionInfo {
-    let params: Vec<FunctionParameterInfo> = input.into_iter().map(|p| FunctionParameterInfo {
-        name: p.name, type_text: p.type_text, type_json: p.type_json, type_name: None,
-        type_precision: p.type_precision, type_scale: p.type_scale,
-        type_interval_type: p.type_interval_type, position: Some(p.ordinal_position),
-        parameter_mode: p.parameter_mode, parameter_type: None,
-        parameter_default: p.parameter_default, comment: p.comment,
+    let params: Vec<FunctionParameterInfo> = input.into_iter().map(|p| {
+        let type_name = p.type_name.as_deref().and_then(parse_col_type_name);
+        FunctionParameterInfo {
+            name: p.name, type_text: p.type_text, type_json: p.type_json, type_name,
+            type_precision: p.type_precision, type_scale: p.type_scale,
+            type_interval_type: p.type_interval_type, position: Some(p.ordinal_position),
+            parameter_type: p.parameter_mode.as_ref().map(|_| "PARAM".to_string()), parameter_mode: p.parameter_mode,
+            parameter_default: p.parameter_default, comment: p.comment,
+        }
     }).collect();
     FunctionInfo { name: r.name.clone(), catalog_name: cat.to_string(), schema_name: sch.to_string(),
         input_params: Some(FunctionParameterInfos { parameters: Some(params) }), return_params: None,

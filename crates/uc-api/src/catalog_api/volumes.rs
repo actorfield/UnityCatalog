@@ -72,10 +72,15 @@ pub async fn delete(State(state): State<AppState>, Extension(claims): Extension<
     Ok(StatusCode::OK)
 }
 
+fn normalize_loc(url: Option<String>) -> Option<String> {
+    url.map(|u| if u.starts_with('/') { format!("file://{}", u) } else { u })
+}
+
 fn to_volume_info(r: VolumeRow, cat: &str, sch: &str) -> VolumeInfo {
     let vt = if r.volume_type == "MANAGED" { VolumeType::Managed } else { VolumeType::External };
     VolumeInfo { catalog_name: cat.to_string(), schema_name: sch.to_string(), name: r.name.clone(),
         comment: r.comment, owner: r.owner, created_at: Some(r.created_at), created_by: r.created_by,
         updated_at: r.updated_at, updated_by: r.updated_by, volume_id: Some(r.id), volume_type: vt,
-        storage_location: r.storage_location, full_name: Some(format!("{}.{}.{}", cat, sch, r.name)) }
+        storage_location: normalize_loc(r.storage_location),
+        full_name: Some(format!("{}.{}.{}", cat, sch, r.name)) }
 }

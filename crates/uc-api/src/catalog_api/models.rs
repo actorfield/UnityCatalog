@@ -57,8 +57,19 @@ pub async fn update_model(State(state): State<AppState>, Extension(claims): Exte
         let user = get_user(&state, &claims.sub).await?;
         require_any(&state, user.id, existing.id, &[Privilege::Owner]).await?;
     }
-    // simple update via sqlx — update comment/owner
-    Ok(Json(to_model_info(existing, cat, sch)))
+    let now = now_ms();
+    sqlx::query(
+        "UPDATE uc_registered_models SET comment=COALESCE($1,comment), owner=COALESCE($2,owner), updated_at=$3 WHERE id=$4"
+    )
+    .bind(req.comment.as_deref())
+    .bind(req.owner.as_deref())
+    .bind(now)
+    .bind(existing.id)
+    .execute(state.pool.as_ref())
+    .await.map_err(crate::db_err)?;
+    let updated = ModelRepo::get_model_by_schema_and_name(&state.pool, schema.id, req.new_name.as_deref().unwrap_or(mdl)).await
+        .unwrap_or(existing);
+    Ok(Json(to_model_info(updated, cat, sch)))
 }
 
 pub async fn delete_model(State(state): State<AppState>, Extension(claims): Extension<Arc<UcClaims>>, Path(full_name): Path<String>) -> Result<StatusCode, UcError> {
@@ -87,8 +98,17 @@ pub async fn create_version(State(state): State<AppState>, Extension(claims): Ex
 }
 
 pub async fn list_versions(State(state): State<AppState>, Path(full_name): Path<String>) -> Result<Json<ListModelVersionsResponse>, UcError> {
-    // stub: return empty list
-    Ok(Json(ListModelVersionsResponse { model_versions: vec![], next_page_token: None }))
+    let (cat, sch, mdl) = split3(&full_name)?;
+    let schema = SchemaRepo::get_by_full_name(&state.pool, cat, sch).await?;
+    let model = ModelRepo::get_model_by_schema_and_name(&state.pool, schema.id, mdl).await?;
+    let rows: Vec<ModelVersionRow> = sqlx::query_as::<_, ModelVersionRow>(
+        "SELECT * FROM uc_model_versions WHERE registered_model_id=$1 ORDER BY version"
+    )
+    .bind(model.id)
+    .fetch_all(state.pool.as_ref())
+    .await.map_err(crate::db_err)?;
+    let model_versions = rows.into_iter().map(|r| to_version_info(r, cat, sch, mdl)).collect();
+    Ok(Json(ListModelVersionsResponse { model_versions, next_page_token: None }))
 }
 
 pub async fn get_version(State(state): State<AppState>, Path((full_name, version)): Path<(String, String)>) -> Result<Json<ModelVersionInfo>, UcError> {

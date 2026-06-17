@@ -113,16 +113,76 @@ pub async fn delete(
     Ok(StatusCode::OK)
 }
 
+fn parse_table_type(s: &str) -> Option<TableType> {
+    match s {
+        "MANAGED" => Some(TableType::Managed),
+        "EXTERNAL" => Some(TableType::External),
+        "STREAMING_TABLE" => Some(TableType::StreamingTable),
+        "MATERIALIZED_VIEW" => Some(TableType::MaterializedView),
+        _ => None,
+    }
+}
+
+fn parse_format(s: &str) -> Option<DataSourceFormat> {
+    match s {
+        "DELTA" => Some(DataSourceFormat::Delta),
+        "CSV" => Some(DataSourceFormat::Csv),
+        "JSON" => Some(DataSourceFormat::Json),
+        "AVRO" => Some(DataSourceFormat::Avro),
+        "PARQUET" => Some(DataSourceFormat::Parquet),
+        "ORC" => Some(DataSourceFormat::Orc),
+        "TEXT" => Some(DataSourceFormat::Text),
+        _ => None,
+    }
+}
+
+fn parse_col_type(s: &str) -> Option<ColumnTypeName> {
+    match s {
+        "BOOLEAN" => Some(ColumnTypeName::Boolean),
+        "BYTE" => Some(ColumnTypeName::Byte),
+        "SHORT" => Some(ColumnTypeName::Short),
+        "INT" => Some(ColumnTypeName::Int),
+        "LONG" => Some(ColumnTypeName::Long),
+        "FLOAT" => Some(ColumnTypeName::Float),
+        "DOUBLE" => Some(ColumnTypeName::Double),
+        "DATE" => Some(ColumnTypeName::Date),
+        "TIMESTAMP" => Some(ColumnTypeName::Timestamp),
+        "TIMESTAMP_NTZ" => Some(ColumnTypeName::TimestampNtz),
+        "STRING" => Some(ColumnTypeName::String),
+        "BINARY" => Some(ColumnTypeName::Binary),
+        "DECIMAL" => Some(ColumnTypeName::Decimal),
+        "ARRAY" => Some(ColumnTypeName::Array),
+        "STRUCT" => Some(ColumnTypeName::Struct),
+        "MAP" => Some(ColumnTypeName::Map),
+        "NULL" => Some(ColumnTypeName::Null),
+        _ => None,
+    }
+}
+
+/// Normalize a storage path to a file:// URI if it is an absolute local path.
+fn normalize_location(url: Option<String>) -> Option<String> {
+    url.map(|u| {
+        if u.starts_with('/') {
+            format!("file://{}", u)
+        } else {
+            u
+        }
+    })
+}
+
 fn to_table_info(r: TableRow, cat: &str, sch: &str, cols: Option<Vec<ColumnRow>>, props: Option<std::collections::HashMap<String,String>>) -> TableInfo {
     let full_name = format!("{}.{}.{}", cat, sch, r.name);
     let columns = cols.map(|cv| cv.into_iter().map(|c| ColumnInfo {
-        name: c.name, type_text: Some(c.type_text), type_json: Some(c.type_json),
-        type_name: None, type_precision: c.type_precision, type_scale: c.type_scale,
+        name: c.name.clone(), type_text: Some(c.type_text.clone()), type_json: Some(c.type_json.clone()),
+        type_name: parse_col_type(&c.type_name), type_precision: c.type_precision, type_scale: c.type_scale,
         type_interval_type: c.type_interval_type, position: Some(c.ordinal_position),
         comment: c.comment, nullable: Some(c.nullable), partition_index: c.partition_index,
     }).collect());
+    let table_type = parse_table_type(&r.r#type);
+    let data_source_format = r.data_source_format.as_deref().and_then(parse_format);
+    let storage_location = normalize_location(r.url);
     TableInfo { name: r.name, catalog_name: cat.to_string(), schema_name: sch.to_string(),
-        table_type: None, data_source_format: None, columns, storage_location: r.url,
+        table_type, data_source_format, columns, storage_location,
         comment: r.comment, properties: props, owner: r.owner, created_at: Some(r.created_at),
         created_by: r.created_by, updated_at: r.updated_at, updated_by: r.updated_by,
         table_id: Some(r.id), full_name: Some(full_name), view_definition: r.view_definition }
