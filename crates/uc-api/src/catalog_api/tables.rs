@@ -48,7 +48,8 @@ pub async fn create(
             id: Uuid::new_v4(), table_id: id,
             name: c.name.clone(), ordinal_position: i as i32,
             type_text: c.type_text.clone().unwrap_or_default(),
-            type_json: c.type_json.clone().unwrap_or_default(),
+            // #1053: derive type_json from type_text if absent
+            type_json: c.type_json.clone().unwrap_or_else(|| c.type_text.as_deref().map(|t| format!(r#"{{\"type\":\"{}\"}}"#, t)).unwrap_or_default()),
             type_name: c.type_name.as_ref().map(|t| format!("{:?}", t).to_uppercase()).unwrap_or_default(),
             type_precision: c.type_precision, type_scale: c.type_scale,
             type_interval_type: c.type_interval_type.clone(),
@@ -73,12 +74,24 @@ pub async fn create(
 
 pub async fn list(
     State(state): State<AppState>,
+    Extension(claims): Extension<Arc<UcClaims>>,
     Query(params): Query<ListParams>,
 ) -> Result<Json<ListTablesResponse>, UcError> {
     let schema = SchemaRepo::get_by_full_name(&state.pool, &params.catalog_name, &params.schema_name).await?;
     let max = params.max_results.unwrap_or(50).min(1000);
     let (rows, next_token) = TableRepo::list(&state.pool, schema.id, params.page_token.as_deref(), max).await?;
-    let tables = rows.into_iter().map(|r| to_table_info(r, &params.catalog_name, &params.schema_name, None, None)).collect();
+    // #1105: filter to only tables the caller can see when auth is enabled
+    let principal = if state.auth_enabled {
+        uc_db::repos::UserRepo::get_by_email(&state.pool, &claims.sub).await?.map(|u| u.id)
+    } else { None };
+    let visible_ids: std::collections::HashSet<uuid::Uuid> = if state.auth_enabled {
+        crate::catalog_api::helpers::filter_visible(&state, principal,
+            rows.iter().map(|r| (r.id, ())).collect(),
+            &[uc_types::Privilege::Owner, uc_types::Privilege::Select]).await?.into_iter().collect()
+    } else {
+        rows.iter().map(|r| r.id).collect()
+    };
+    let tables = rows.into_iter().filter(|r| visible_ids.contains(&r.id)).map(|r| to_table_info(r, &params.catalog_name, &params.schema_name, None, None)).collect();
     Ok(Json(ListTablesResponse { tables, next_page_token: next_token }))
 }
 

@@ -32,13 +32,24 @@ pub async fn create_model(State(state): State<AppState>, Extension(claims): Exte
     Ok(Json(to_model_info(created, &req.catalog_name, &req.schema_name)))
 }
 
-pub async fn list_models(State(state): State<AppState>, Query(params): Query<ListModelsParams>) -> Result<Json<ListRegisteredModelsResponse>, UcError> {
+pub async fn list_models(State(state): State<AppState>, Extension(claims): Extension<Arc<UcClaims>>, Query(params): Query<ListModelsParams>) -> Result<Json<ListRegisteredModelsResponse>, UcError> {
     let cat = params.catalog_name.as_deref().unwrap_or("");
     let sch = params.schema_name.as_deref().unwrap_or("");
     let schema = SchemaRepo::get_by_full_name(&state.pool, cat, sch).await?;
     let max = params.max_results.unwrap_or(50).min(1000);
     let (rows, next_token) = ModelRepo::list_models(&state.pool, schema.id, params.page_token.as_deref(), max).await?;
-    let registered_models = rows.into_iter().map(|r| to_model_info(r, cat, sch)).collect();
+    // #1105: filter to only models the caller can see when auth is enabled
+    let principal = if state.auth_enabled {
+        uc_db::repos::UserRepo::get_by_email(&state.pool, &claims.sub).await?.map(|u| u.id)
+    } else { None };
+    let visible_ids: std::collections::HashSet<uuid::Uuid> = if state.auth_enabled {
+        crate::catalog_api::helpers::filter_visible(&state, principal,
+            rows.iter().map(|r| (r.id, ())).collect(),
+            &[uc_types::Privilege::Owner, uc_types::Privilege::Select]).await?.into_iter().collect()
+    } else {
+        rows.iter().map(|r| r.id).collect()
+    };
+    let registered_models = rows.into_iter().filter(|r| visible_ids.contains(&r.id)).map(|r| to_model_info(r, cat, sch)).collect();
     Ok(Json(ListRegisteredModelsResponse { registered_models, next_page_token: next_token }))
 }
 

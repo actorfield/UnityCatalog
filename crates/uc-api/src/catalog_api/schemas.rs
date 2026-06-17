@@ -45,12 +45,24 @@ pub async fn create(
 
 pub async fn list(
     State(state): State<AppState>,
+    Extension(claims): Extension<Arc<UcClaims>>,
     Query(params): Query<ListParams>,
 ) -> Result<Json<ListSchemasResponse>, UcError> {
     let catalog = CatalogRepo::get_by_name(&state.pool, &params.catalog_name).await?;
     let max = params.max_results.unwrap_or(50).min(1000);
     let (rows, next_token) = SchemaRepo::list(&state.pool, catalog.id, params.page_token.as_deref(), max).await?;
-    let schemas = rows.into_iter().map(|r| to_schema_info(r, catalog.name.clone(), None)).collect();
+    // #1105: filter to only schemas the caller can see
+    let principal = if state.auth_enabled {
+        uc_db::repos::UserRepo::get_by_email(&state.pool, &claims.sub).await?.map(|u| u.id)
+    } else { None };
+    let visible_ids: std::collections::HashSet<uuid::Uuid> = if state.auth_enabled {
+        filter_visible(&state, principal, rows.iter().map(|r| (r.id, ())).collect(),
+            &[uc_types::Privilege::Owner, uc_types::Privilege::UseSchema]).await?.into_iter().collect()
+    } else {
+        rows.iter().map(|r| r.id).collect()
+    };
+    let schemas = rows.into_iter().filter(|r| visible_ids.contains(&r.id))
+        .map(|r| to_schema_info(r, catalog.name.clone(), None)).collect();
     Ok(Json(ListSchemasResponse { schemas, next_page_token: next_token }))
 }
 

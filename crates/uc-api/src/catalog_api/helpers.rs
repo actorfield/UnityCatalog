@@ -35,3 +35,29 @@ pub fn auth_sub<'a>(state: &AppState, claims: &'a UcClaims) -> Option<&'a str> {
 }
 
 pub fn now_ms() -> i64 { chrono::Utc::now().timestamp_millis() }
+
+/// Filter a list of resources to only those the principal can see.
+/// When auth is disabled, all resources are visible.
+/// Fix for issue #1105: schema/table/volume/function/model owners couldn't see
+/// their own resources in list responses because listing didn't check RBAC.
+pub async fn filter_visible(
+    state: &AppState,
+    principal: Option<Uuid>,
+    resource_ids: Vec<(Uuid, impl Send)>,
+    view_privs: &[Privilege],
+) -> Result<Vec<Uuid>, UcError> {
+    if !state.auth_enabled {
+        return Ok(resource_ids.into_iter().map(|(id, _)| id).collect());
+    }
+    let principal = match principal {
+        Some(p) => p,
+        None => return Ok(vec![]),
+    };
+    let mut visible = Vec::new();
+    for (id, _) in resource_ids {
+        if state.authorizer.authorize_any(principal, id, view_privs).await? {
+            visible.push(id);
+        }
+    }
+    Ok(visible)
+}

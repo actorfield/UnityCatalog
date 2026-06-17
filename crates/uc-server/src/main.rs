@@ -34,20 +34,24 @@ struct Args {
     /// Disable authorization (allow all requests)
     #[arg(long, default_value_t = false)]
     no_auth: bool,
+
+    /// Log level: error, warn, info, debug, trace (or RUST_LOG env var)
+    #[arg(long, default_value = "info")]
+    log_level: String,
 }
 
 // ── Entry point ───────────────────────────────────────────────────────────────
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    // Initialize structured logging
+    let args = Args::parse();
+
+    // #1407: log level configurable via --log-level or RUST_LOG env var
     tracing_subscriber::registry()
         .with(tracing_subscriber::EnvFilter::try_from_default_env()
-            .unwrap_or_else(|_| "uc_server=info,uc_api=info,uc_db=info".into()))
+            .unwrap_or_else(|_| format!("uc_server={l},uc_api={l},uc_db={l}", l = args.log_level).into()))
         .with(tracing_subscriber::fmt::layer())
         .init();
-
-    let args = Args::parse();
 
     info!("Starting Unity Catalog server on port {}", args.port);
     info!("Config dir: {}", args.config_dir.display());

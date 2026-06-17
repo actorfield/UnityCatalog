@@ -32,11 +32,22 @@ pub async fn create(State(state): State<AppState>, Extension(claims): Extension<
     Ok(Json(to_volume_info(created, &req.catalog_name, &req.schema_name)))
 }
 
-pub async fn list(State(state): State<AppState>, Query(params): Query<ListParams>) -> Result<Json<ListVolumesResponseContent>, UcError> {
+pub async fn list(State(state): State<AppState>, Extension(claims): Extension<Arc<UcClaims>>, Query(params): Query<ListParams>) -> Result<Json<ListVolumesResponseContent>, UcError> {
     let schema = SchemaRepo::get_by_full_name(&state.pool, &params.catalog_name, &params.schema_name).await?;
     let max = params.max_results.unwrap_or(50).min(1000);
     let (rows, next_token) = VolumeRepo::list(&state.pool, schema.id, params.page_token.as_deref(), max).await?;
-    let volumes = rows.into_iter().map(|r| to_volume_info(r, &params.catalog_name, &params.schema_name)).collect();
+    // #1105: filter to only volumes the caller can see when auth is enabled
+    let principal = if state.auth_enabled {
+        uc_db::repos::UserRepo::get_by_email(&state.pool, &claims.sub).await?.map(|u| u.id)
+    } else { None };
+    let visible_ids: std::collections::HashSet<uuid::Uuid> = if state.auth_enabled {
+        crate::catalog_api::helpers::filter_visible(&state, principal,
+            rows.iter().map(|r| (r.id, ())).collect(),
+            &[uc_types::Privilege::Owner, uc_types::Privilege::ReadVolume]).await?.into_iter().collect()
+    } else {
+        rows.iter().map(|r| r.id).collect()
+    };
+    let volumes = rows.into_iter().filter(|r| visible_ids.contains(&r.id)).map(|r| to_volume_info(r, &params.catalog_name, &params.schema_name)).collect();
     Ok(Json(ListVolumesResponseContent { volumes, next_page_token: next_token }))
 }
 
