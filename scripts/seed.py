@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Seed the Rust UC server with the same sample data as the Java server's PopulateTestDatabase."""
-import requests, sys, json
+import os, requests, sys, json
 
-BASE = sys.argv[1] if len(sys.argv) > 1 else "http://localhost:8080"
+BASE = sys.argv[1] if len(sys.argv) > 1 else os.environ.get("UC_HOST", "http://localhost:8080")
 CAT  = f"{BASE}/api/2.1/unity-catalog"
 CTRL = f"{BASE}/api/1.0/unity-control"
 
@@ -24,11 +24,12 @@ post(f"{CAT}/catalogs", {"name":"unity","comment":"Main catalog"})
 # Schema
 post(f"{CAT}/schemas", {"name":"default","catalog_name":"unity","comment":"Default schema"})
 
-# marksheet — MANAGED table
+# marksheet — MANAGED table (uses staging table flow)
+_staging = post(f"{CAT}/staging-tables", {"name":"marksheet","catalog_name":"unity","schema_name":"default"})
 post(f"{CAT}/tables", {
     "name":"marksheet","catalog_name":"unity","schema_name":"default",
     "table_type":"MANAGED","data_source_format":"DELTA",
-    "storage_location":"etc/data/managed/unity/default/tables/marksheet",
+    "storage_location":_staging["staging_location"],
     "comment":"Managed table",
     "columns":[
         {"name":"id","type_text":"int","type_json":'{"name":"id","type":"integer","nullable":false,"metadata":{}}',

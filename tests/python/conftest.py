@@ -14,7 +14,9 @@ from unitycatalog.client import (
     SchemasApi, TablesApi, VolumesApi,
 )
 
-UC_HOST = "http://localhost:8080/api/2.1/unity-catalog"
+import os
+_BASE = os.environ.get("UC_HOST", "http://localhost:8080")
+UC_HOST = f"{_BASE}/api/2.1/unity-catalog"
 
 
 @pytest.fixture(scope="session", autouse=True)

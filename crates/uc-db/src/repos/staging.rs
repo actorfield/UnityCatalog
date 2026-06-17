@@ -21,6 +21,14 @@ impl StagingTableRepo {
             .bind(id).fetch_one(pool).await.map_err(crate::sqlx_err)
     }
 
+    /// Find a staging table by its storage location (used during MANAGED table commit).
+    pub async fn get_by_location(pool: &AnyPool, location: &str) -> Result<StagingTableRow, UcError> {
+        sqlx::query_as::<_, StagingTableRow>(
+            "SELECT * FROM uc_staging_tables WHERE staging_location = $1",
+        )
+        .bind(location).fetch_one(pool).await.map_err(crate::sqlx_err)
+    }
+
     pub async fn mark_committed(pool: &AnyPool, id: Uuid, committed_at: i64) -> Result<(), UcError> {
         sqlx::query(
             "UPDATE uc_staging_tables SET stage_committed=1, stage_committed_at=$1 WHERE id=$2",

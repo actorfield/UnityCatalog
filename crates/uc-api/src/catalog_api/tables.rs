@@ -1,8 +1,12 @@
 use axum::{extract::{Path, Query, State}, http::StatusCode, Extension, Json};
 use std::sync::Arc;
 use uc_auth::UcClaims;
-use uc_db::{models::table::{ColumnRow, TableRow}, repos::{PropertyRepo, SchemaRepo, TableRepo}};
-use uc_errors::UcError;
+use uc_db::{
+    managed_storage,
+    models::table::{ColumnRow, TableRow},
+    repos::{PropertyRepo, SchemaRepo, StagingTableRepo, TableRepo, UserRepo},
+};
+use uc_errors::{ErrorCode, UcError};
 use uc_openapi::catalog::{ColumnInfo, ColumnTypeName, CreateTable, DataSourceFormat, ListTablesResponse, TableInfo, TableType};
 use uc_types::Privilege;
 use uuid::Uuid;
@@ -26,16 +30,74 @@ pub async fn create(
         let user = get_user(&state, &claims.sub).await?;
         require_any(&state, user.id, schema.id, &[Privilege::Owner, Privilege::CreateTable]).await?;
     }
-    let id = Uuid::new_v4();
+
     let now = now_ms();
+    let caller = auth_sub(&state, &claims).map(String::from);
+
+    // ── #1143: Managed table staging commit flow ──────────────────────────────
+    let (id, storage_location) = match req.table_type {
+        TableType::Managed => {
+            let storage_loc = req.storage_location.as_deref().unwrap_or("");
+
+            // If caller provided a staging location, find and commit the staging table
+            let (table_id, resolved_loc) = if !storage_loc.is_empty() {
+                // Commit the staging table — find by location, validate caller owns it
+                let staging = StagingTableRepo::get_by_location(&state.pool, storage_loc).await
+                    .map_err(|_| UcError::new(
+                        ErrorCode::NotFound,
+                        format!("No staging table found at location '{}'. \
+                                 Create a staging table first via POST /staging-tables.", storage_loc),
+                    ))?;
+
+                if staging.stage_committed {
+                    return Err(UcError::new(
+                        ErrorCode::FailedPrecondition,
+                        format!("Staging table at '{}' has already been committed.", storage_loc),
+                    ));
+                }
+
+                // Validate caller owns the staging table
+                if state.auth_enabled {
+                    let user = UserRepo::get_by_email(&state.pool, &claims.sub).await?
+                        .ok_or_else(|| UcError::unauthenticated("User not found"))?;
+                    if !state.authorizer.authorize_any(
+                        user.id, staging.id, &[Privilege::Owner]
+                    ).await? {
+                        return Err(UcError::permission_denied(
+                            "Only the staging table creator can commit it into a MANAGED table"
+                        ));
+                    }
+                }
+
+                // Mark staging as committed — use staging UUID as table ID (Java behaviour)
+                StagingTableRepo::mark_committed(&state.pool, staging.id, now).await?;
+                (staging.id, staging.staging_location.clone())
+            } else {
+                // No staging location provided — auto-derive from storage_root hierarchy
+                let root = managed_storage::resolve_storage_root(
+                    &state.pool, &req.catalog_name, &req.schema_name,
+                ).await?;
+                let new_id = Uuid::new_v4();
+                let loc = managed_storage::managed_table_location(&root, schema.id, new_id);
+                (new_id, loc)
+            };
+
+            (table_id, Some(resolved_loc))
+        }
+        _ => {
+            // EXTERNAL / VIEW — use provided storage_location as-is
+            (Uuid::new_v4(), req.storage_location.clone())
+        }
+    };
+
     let col_count = req.columns.as_ref().map(|c| c.len() as i32);
     let row = TableRow {
         id, schema_id: schema.id, name: req.name.clone(),
         r#type: format!("{:?}", req.table_type).to_uppercase(),
-        owner: None, created_at: now, created_by: auth_sub(&state, &claims).map(String::from),
+        owner: None, created_at: now, created_by: caller,
         updated_at: None, updated_by: None,
         data_source_format: req.data_source_format.as_ref().map(|f| format!("{:?}", f).to_uppercase()),
-        comment: req.comment.clone(), url: req.storage_location.clone(),
+        comment: req.comment.clone(), url: storage_location,
         column_count: col_count, view_definition: req.view_definition.clone(),
         uniform_iceberg_metadata_location: None,
         uniform_iceberg_converted_delta_version: None,

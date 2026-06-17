@@ -1,7 +1,7 @@
 use axum::{extract::{Path, Query, State}, http::StatusCode, Extension, Json};
 use std::sync::Arc;
 use uc_auth::UcClaims;
-use uc_db::{models::model::{ModelVersionRow, RegisteredModelRow}, repos::{ModelRepo, SchemaRepo, UserRepo}};
+use uc_db::{managed_storage, models::model::{ModelVersionRow, RegisteredModelRow}, repos::{ModelRepo, SchemaRepo, UserRepo}};
 use uc_errors::UcError;
 use uc_openapi::catalog::{CreateModelVersion, CreateRegisteredModel, FinalizeModelVersion, ListModelVersionsResponse, ListRegisteredModelsResponse, ModelVersionInfo, ModelVersionStatus, RegisteredModelInfo, UpdateModelVersion, UpdateRegisteredModel};
 use uc_types::Privilege;
@@ -18,9 +18,17 @@ pub async fn create_model(State(state): State<AppState>, Extension(claims): Exte
         require_any(&state, user.id, schema.id, &[Privilege::Owner, Privilege::CreateModel]).await?;
     }
     let id = Uuid::new_v4(); let now = now_ms();
+    // #1143: auto-derive model storage location from storage_root if not provided
+    let model_storage = match req.storage_location {
+        Some(ref loc) => Some(loc.clone()),
+        None => match managed_storage::resolve_storage_root(&state.pool, &req.catalog_name, &req.schema_name).await {
+            Ok(root) => Some(managed_storage::managed_model_location(&root, schema.id, id)),
+            Err(_) => None,
+        },
+    };
     let row = RegisteredModelRow { id, schema_id: schema.id, name: req.name.clone(), owner: None,
         created_at: Some(now), created_by: auth_sub(&state, &claims).map(String::from),
-        updated_at: None, updated_by: None, comment: req.comment.clone(), url: req.storage_location.clone(),
+        updated_at: None, updated_by: None, comment: req.comment.clone(), url: model_storage,
         max_version_number: Some(0) };
     let created = ModelRepo::create_model(&state.pool, &row).await?;
     if state.auth_enabled {
@@ -100,10 +108,14 @@ pub async fn create_version(State(state): State<AppState>, Extension(claims): Ex
     let model = ModelRepo::get_model_by_schema_and_name(&state.pool, schema.id, &req.model_name).await?;
     let next_ver = model.max_version_number.unwrap_or(0) + 1;
     let id = Uuid::new_v4(); let now = now_ms();
+    // #1143: derive version storage location from model storage location
+    let version_url = model.url.as_deref().map(|model_loc|
+        managed_storage::managed_model_version_location(model_loc, next_ver)
+    );
     let row = ModelVersionRow { id, registered_model_id: model.id, version: Some(next_ver),
         source: req.source.clone(), run_id: req.run_id.clone(), status: Some("PENDING_REGISTRATION".into()),
         owner: None, created_at: Some(now), created_by: auth_sub(&state, &claims).map(String::from),
-        updated_at: None, updated_by: None, comment: req.comment.clone(), url: None };
+        updated_at: None, updated_by: None, comment: req.comment.clone(), url: version_url };
     let created = ModelRepo::create_version(&state.pool, &row).await?;
     Ok(Json(to_version_info(created, &req.catalog_name, &req.schema_name, &req.model_name)))
 }

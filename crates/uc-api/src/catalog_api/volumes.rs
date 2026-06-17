@@ -1,7 +1,7 @@
 use axum::{extract::{Path, Query, State}, http::StatusCode, Extension, Json};
 use std::sync::Arc;
 use uc_auth::UcClaims;
-use uc_db::{models::volume::VolumeRow, repos::{SchemaRepo, VolumeRepo}};
+use uc_db::{managed_storage, models::volume::VolumeRow, repos::{SchemaRepo, VolumeRepo}};
 use uc_errors::UcError;
 use uc_openapi::catalog::{CreateVolumeRequestContent, ListVolumesResponseContent, UpdateVolumeRequestContent, VolumeInfo, VolumeType};
 use uc_types::Privilege;
@@ -18,8 +18,18 @@ pub async fn create(State(state): State<AppState>, Extension(claims): Extension<
         require_any(&state, user.id, schema.id, &[Privilege::Owner, Privilege::CreateVolume]).await?;
     }
     let id = Uuid::new_v4(); let now = now_ms();
+    // #1143: MANAGED volumes auto-derive storage_location from storage_root hierarchy
+    let storage_location = match req.volume_type {
+        VolumeType::Managed if req.storage_location.is_none() => {
+            match managed_storage::resolve_storage_root(&state.pool, &req.catalog_name, &req.schema_name).await {
+                Ok(root) => Some(managed_storage::managed_volume_location(&root, schema.id, id)),
+                Err(_) => None,
+            }
+        }
+        _ => req.storage_location.clone(),
+    };
     let row = VolumeRow { id, schema_id: schema.id, name: req.name.clone(), comment: req.comment.clone(),
-        storage_location: req.storage_location.clone(), owner: None, created_at: now,
+        storage_location, owner: None, created_at: now,
         created_by: auth_sub(&state, &claims).map(String::from), updated_at: None, updated_by: None,
         volume_type: format!("{:?}", req.volume_type).to_uppercase() };
     let created = VolumeRepo::create(&state.pool, &row).await?;

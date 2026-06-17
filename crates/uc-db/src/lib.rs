@@ -1,6 +1,7 @@
 pub mod models;
 pub mod repos;
 pub mod pool;
+pub mod managed_storage;
 
 pub use pool::AnyPool;
 
