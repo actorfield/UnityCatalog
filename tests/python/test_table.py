@@ -15,12 +15,11 @@ async def test_table_list(tables_api):
     api_response = await tables_api.list_tables("unity", "default")
     table_names_and_types = {(t.name, t.table_type) for t in api_response.tables}
 
-    assert table_names_and_types == {
-        ("marksheet", TableType.MANAGED),
-        ("marksheet_uniform", TableType.EXTERNAL),
-        ("numbers", TableType.EXTERNAL),
-        ("user_countries", TableType.EXTERNAL),
-    }
+    # Check that seed tables are present (other tests may add tables to this schema)
+    assert ("marksheet", TableType.MANAGED) in table_names_and_types
+    assert ("marksheet_uniform", TableType.EXTERNAL) in table_names_and_types
+    assert ("numbers", TableType.EXTERNAL) in table_names_and_types
+    assert ("user_countries", TableType.EXTERNAL) in table_names_and_types
 
 
 @pytest.mark.asyncio

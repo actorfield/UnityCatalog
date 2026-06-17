@@ -7,7 +7,7 @@ use uc_openapi::catalog::TemporaryCredentials;
 use uc_types::UriScheme;
 
 // Credentials are reused until this many seconds before expiry.
-const CACHE_EXPIRY_BUFFER_SECS: u64 = 60;
+pub(crate) const CACHE_EXPIRY_BUFFER_SECS: u64 = 60;
 
 #[derive(Clone)]
 struct CachedCredential {
@@ -167,5 +167,92 @@ impl AwsCredentialVendor {
             }),
             ..Default::default()
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::context::{CredentialContext, CredentialOperation};
+    use uc_types::UriScheme;
+
+    fn local_ctx(url: &str) -> CredentialContext {
+        CredentialContext {
+            scheme: UriScheme::from_url(url),
+            locations: vec![url.to_string()],
+            operation: CredentialOperation::Read,
+            table_id: None,
+            credential_json: None,
+            role_arn: None,
+            external_id: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn local_file_returns_empty_credentials() {
+        let vendor = CloudCredentialVendor::new();
+        let ctx = local_ctx("file:///tmp/test");
+        let creds = vendor.vend(&ctx).await.unwrap();
+        assert!(creds.aws_temp_credentials.is_none());
+        assert!(creds.gcp_oauth_token.is_none());
+        assert!(creds.azure_user_delegation_sas.is_none());
+    }
+
+    #[tokio::test]
+    async fn null_scheme_returns_empty_credentials() {
+        let vendor = CloudCredentialVendor::new();
+        let ctx = local_ctx("unknown://x");
+        // NULL scheme → local/empty (no cloud SDK needed)
+        // This should fall to the File/Null arm and return default
+        let creds = vendor.vend(&ctx).await;
+        // Either empty creds or Unimplemented — both acceptable for null scheme
+        match creds {
+            Ok(c) => {
+                assert!(c.aws_temp_credentials.is_none());
+            }
+            Err(e) => {
+                assert!(e.to_string().contains("UNIMPLEMENTED") || e.to_string().contains("not"));
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn local_file_vend_twice_is_consistent() {
+        let vendor = CloudCredentialVendor::new();
+        let ctx = local_ctx("file:///tmp/repeat");
+        let c1 = vendor.vend(&ctx).await.unwrap();
+        let c2 = vendor.vend(&ctx).await.unwrap();
+        // Both should be empty (local path, no cloud creds)
+        assert!(c1.aws_temp_credentials.is_none());
+        assert!(c2.aws_temp_credentials.is_none());
+    }
+
+    #[tokio::test]
+    async fn s3_without_aws_feature_returns_unimplemented() {
+        let vendor = CloudCredentialVendor::new();
+        let ctx = local_ctx("s3://my-bucket/path");
+        let result = vendor.vend(&ctx).await;
+        // Without the aws feature, should be Unimplemented
+        assert!(result.is_err());
+        let msg = result.unwrap_err().to_string();
+        assert!(msg.contains("UNIMPLEMENTED") || msg.contains("not configured") || msg.contains("not yet"));
+    }
+
+    #[tokio::test]
+    async fn azure_returns_unimplemented() {
+        let vendor = CloudCredentialVendor::new();
+        let ctx = local_ctx("abfss://container@account.dfs.core.windows.net/path");
+        let result = vendor.vend(&ctx).await;
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("UNIMPLEMENTED"));
+    }
+
+    #[tokio::test]
+    async fn gcs_returns_unimplemented() {
+        let vendor = CloudCredentialVendor::new();
+        let ctx = local_ctx("gs://my-bucket/path");
+        let result = vendor.vend(&ctx).await;
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("UNIMPLEMENTED"));
     }
 }

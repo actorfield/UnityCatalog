@@ -117,6 +117,10 @@ pub async fn create_version(State(state): State<AppState>, Extension(claims): Ex
         owner: None, created_at: Some(now), created_by: auth_sub(&state, &claims).map(String::from),
         updated_at: None, updated_by: None, comment: req.comment.clone(), url: version_url };
     let created = ModelRepo::create_version(&state.pool, &row).await?;
+    // Update max_version_number on the parent model
+    sqlx::query("UPDATE uc_registered_models SET max_version_number=$1 WHERE id=$2")
+        .bind(next_ver).bind(model.id)
+        .execute(state.pool.as_ref()).await.map_err(crate::db_err)?;
     Ok(Json(to_version_info(created, &req.catalog_name, &req.schema_name, &req.model_name)))
 }
 
