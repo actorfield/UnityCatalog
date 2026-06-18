@@ -210,7 +210,6 @@ pub async fn delete(
         // force=true: delete all child schemas (with their children)
         let (all_schemas, _) = uc_db::repos::SchemaRepo::list(&state.pool, existing.id, None, 10000).await?;
         for schema in all_schemas {
-            let schema_full = format!("{}.{}", name, schema.name);
             delete_schema_children(&state.pool, schema.id).await?;
             PropertyRepo::delete_for_entity(&state.pool, schema.id, "schema").await?;
             state.authorizer.remove_hierarchy_children(schema.id).await?;
