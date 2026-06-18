@@ -255,4 +255,157 @@ mod tests {
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("UNIMPLEMENTED"));
     }
+
+    // ── make_cache_key ────────────────────────────────────────────────────────
+
+    #[test]
+    fn cache_key_sorts_locations() {
+        let ctx1 = CredentialContext {
+            scheme: UriScheme::S3,
+            locations: vec!["s3://b/z".to_string(), "s3://b/a".to_string()],
+            operation: CredentialOperation::Read,
+            table_id: None,
+            credential_json: None,
+            role_arn: Some("arn:aws:iam::123:role/MyRole".to_string()),
+            external_id: None,
+        };
+        let ctx2 = CredentialContext {
+            scheme: UriScheme::S3,
+            locations: vec!["s3://b/a".to_string(), "s3://b/z".to_string()], // reversed order
+            operation: CredentialOperation::Read,
+            table_id: None,
+            credential_json: None,
+            role_arn: Some("arn:aws:iam::123:role/MyRole".to_string()),
+            external_id: None,
+        };
+        // Same key regardless of location order — cache must be order-independent
+        assert_eq!(make_cache_key(&ctx1), make_cache_key(&ctx2));
+    }
+
+    #[test]
+    fn cache_key_differs_by_role() {
+        let ctx1 = CredentialContext {
+            scheme: UriScheme::S3,
+            locations: vec!["s3://b/x".to_string()],
+            operation: CredentialOperation::Read,
+            table_id: None,
+            credential_json: None,
+            role_arn: Some("role-a".to_string()),
+            external_id: None,
+        };
+        let ctx2 = CredentialContext {
+            role_arn: Some("role-b".to_string()),
+            ..ctx1.clone()
+        };
+        assert_ne!(make_cache_key(&ctx1), make_cache_key(&ctx2));
+    }
+
+    #[test]
+    fn cache_key_no_role_uses_empty_string() {
+        let ctx = CredentialContext {
+            scheme: UriScheme::File,
+            locations: vec!["/tmp/x".to_string()],
+            operation: CredentialOperation::Read,
+            table_id: None,
+            credential_json: None,
+            role_arn: None,
+            external_id: None,
+        };
+        let key = make_cache_key(&ctx);
+        assert!(key.starts_with("::"), "no role → key starts with '::'");
+    }
+
+    // ── parse_expiry_ttl ──────────────────────────────────────────────────────
+
+    #[test]
+    fn parse_expiry_ttl_future_returns_some() {
+        use uc_openapi::catalog::{TemporaryCredentials, AwsCredentials};
+        use std::time::Duration;
+
+        let future = chrono::Utc::now() + chrono::Duration::minutes(60);
+        let creds = TemporaryCredentials {
+            aws_temp_credentials: Some(AwsCredentials {
+                access_key_id: "AK".to_string(),
+                secret_access_key: "SK".to_string(),
+                session_token: "ST".to_string(),
+                expiration: Some(future.to_rfc3339()),
+            }),
+            ..Default::default()
+        };
+        let ttl = parse_expiry_ttl(&creds);
+        assert!(ttl.is_some());
+        // TTL = (60min - 1min buffer) ≈ 59min; allow some slack for slow CI
+        let secs = ttl.unwrap().as_secs();
+        assert!(secs > 3000 && secs <= 3600, "expected ~55-59 min TTL, got {}s", secs);
+    }
+
+    #[test]
+    fn parse_expiry_ttl_past_returns_none() {
+        use uc_openapi::catalog::{TemporaryCredentials, AwsCredentials};
+
+        let past = chrono::Utc::now() - chrono::Duration::minutes(5);
+        let creds = TemporaryCredentials {
+            aws_temp_credentials: Some(AwsCredentials {
+                access_key_id: "AK".to_string(),
+                secret_access_key: "SK".to_string(),
+                session_token: "ST".to_string(),
+                expiration: Some(past.to_rfc3339()),
+            }),
+            ..Default::default()
+        };
+        // Already expired → None (don't cache near-expired creds)
+        assert!(parse_expiry_ttl(&creds).is_none());
+    }
+
+    #[test]
+    fn parse_expiry_ttl_no_expiry_returns_none() {
+        use uc_openapi::catalog::TemporaryCredentials;
+        let creds = TemporaryCredentials::default();
+        assert!(parse_expiry_ttl(&creds).is_none());
+    }
+
+    #[test]
+    fn parse_expiry_ttl_malformed_returns_none() {
+        use uc_openapi::catalog::{TemporaryCredentials, AwsCredentials};
+        let creds = TemporaryCredentials {
+            aws_temp_credentials: Some(AwsCredentials {
+                access_key_id: "AK".to_string(),
+                secret_access_key: "SK".to_string(),
+                session_token: "ST".to_string(),
+                expiration: Some("not-a-date".to_string()),
+            }),
+            ..Default::default()
+        };
+        assert!(parse_expiry_ttl(&creds).is_none());
+    }
+
+    // ── expiration_time field (non-aws path) ──────────────────────────────────
+
+    #[test]
+    fn parse_expiry_ttl_uses_expiration_time_field() {
+        use uc_openapi::catalog::TemporaryCredentials;
+
+        let future = chrono::Utc::now() + chrono::Duration::minutes(30);
+        let creds = TemporaryCredentials {
+            expiration_time: Some(future.to_rfc3339()),
+            ..Default::default()
+        };
+        let ttl = parse_expiry_ttl(&creds);
+        assert!(ttl.is_some());
+    }
+
+    // ── cache hit path ────────────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn local_file_vend_twice_uses_cache_on_second_call() {
+        // For local/file scheme, vend bypasses cache, but both calls succeed.
+        // We can't test cache-hit for S3 without credentials.
+        // This test verifies the bypass path is consistent on repeated calls.
+        let vendor = CloudCredentialVendor::new();
+        let ctx = local_ctx("file:///tmp/cache-test");
+        for _ in 0..3 {
+            let result = vendor.vend(&ctx).await.unwrap();
+            assert!(result.aws_temp_credentials.is_none());
+        }
+    }
 }

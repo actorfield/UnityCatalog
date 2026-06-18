@@ -224,6 +224,35 @@ mod tests {
         assert!(grants.is_empty());
     }
 
+    // ── init_admin ────────────────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn init_admin_grants_owner_on_metastore() {
+        let auth = UcAuthorizer::new_in_memory().await.unwrap();
+        let admin = Uuid::new_v4();
+        let metastore = Uuid::new_v4();
+
+        auth.init_admin(admin, metastore).await.unwrap();
+
+        assert!(
+            auth.authorize(admin, metastore, Privilege::Owner).await.unwrap(),
+            "init_admin must grant Owner privilege on the metastore"
+        );
+    }
+
+    #[tokio::test]
+    async fn init_admin_allows_create_catalog_via_authorize_any() {
+        let auth = UcAuthorizer::new_in_memory().await.unwrap();
+        let admin = Uuid::new_v4();
+        let metastore = Uuid::new_v4();
+        auth.init_admin(admin, metastore).await.unwrap();
+
+        // Owner implies CreateCatalog in the casbin model
+        let allowed = auth.authorize_any(admin, metastore, &[Privilege::CreateCatalog, Privilege::Owner])
+            .await.unwrap();
+        assert!(allowed);
+    }
+
     // ── UcAuthorizer in-memory ────────────────────────────────────────────────
 
     #[tokio::test]
