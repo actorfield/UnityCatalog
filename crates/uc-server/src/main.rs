@@ -176,8 +176,9 @@ async fn fetch_oidc_jwks(issuer: &str) -> anyhow::Result<JwkSet> {
     let issuer = issuer.trim_end_matches('/');
     let discovery_url = format!("{issuer}/.well-known/openid-configuration");
 
-    // In-cluster: load the k8s CA cert from the automounted SA volume so reqwest/rustls
-    // can verify the k3s API server's self-signed cert without --oidc-insecure.
+    // In-cluster: load the k8s CA cert and SA bearer token from the automounted SA volume.
+    // - CA cert: lets reqwest/rustls verify the k3s API server's self-signed cert.
+    // - Bearer token: k3s requires auth on /.well-known/openid-configuration (returns 401 otherwise).
     let mut builder = reqwest::Client::builder();
     if let Ok(pem) = std::fs::read("/var/run/secrets/kubernetes.io/serviceaccount/ca.crt") {
         if let Ok(cert) = reqwest::Certificate::from_pem(&pem) {
@@ -186,19 +187,31 @@ async fn fetch_oidc_jwks(issuer: &str) -> anyhow::Result<JwkSet> {
     }
     let client = builder.build().context("Failed to build HTTP client")?;
 
-    let discovery: serde_json::Value = client
-        .get(&discovery_url)
+    let sa_token = std::fs::read_to_string("/var/run/secrets/kubernetes.io/serviceaccount/token")
+        .unwrap_or_default();
+    let sa_token = sa_token.trim();
+
+    let mut discovery_req = client.get(&discovery_url);
+    if !sa_token.is_empty() {
+        discovery_req = discovery_req.bearer_auth(sa_token);
+    }
+    let discovery: serde_json::Value = discovery_req
         .send()
         .await
         .context("OIDC discovery request failed")?
         .json()
         .await
         .context("OIDC discovery response not valid JSON")?;
+
     let jwks_uri = discovery["jwks_uri"]
         .as_str()
         .ok_or_else(|| anyhow::anyhow!("OIDC discovery response missing 'jwks_uri'"))?;
-    let jwks: JwkSet = client
-        .get(jwks_uri)
+
+    let mut jwks_req = client.get(jwks_uri);
+    if !sa_token.is_empty() {
+        jwks_req = jwks_req.bearer_auth(sa_token);
+    }
+    let jwks: JwkSet = jwks_req
         .send()
         .await
         .context("JWKS fetch failed")?
