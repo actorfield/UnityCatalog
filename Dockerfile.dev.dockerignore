@@ -1,0 +1,4 @@
+*.fossil
+.fslckout
+.fossil-settings/
+.fossil-ignore
