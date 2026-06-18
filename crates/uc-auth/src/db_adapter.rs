@@ -95,8 +95,17 @@ impl Adapter for SqlxAdapter {
         let rows = self.load_all().await?;
         for row in rows {
             let policy = row.to_policy();
-            // ptype "p" → policy rules, "g" → role grouping, "g2" → resource hierarchy
-            let _ = model.add_policy(&row.ptype, "", policy);
+            // sec is the section name: "p" for policy rows, "g" for role/hierarchy rows.
+            // ptype is the type key within that section ("p", "g", "g2").
+            // Passing "" as the type key caused policies to load into an unnamed bucket
+            // that is never matched during enforce — rules appeared to persist but were
+            // silently ignored on every restart.
+            let sec = match row.ptype.as_str() {
+                "p" => "p",
+                "g" | "g2" => "g",
+                other => other,
+            };
+            let _ = model.add_policy(sec, &row.ptype, policy);
         }
         Ok(())
     }
@@ -210,5 +219,61 @@ impl Adapter for SqlxAdapter {
             .await
             .map_err(|e| casbin::Error::AdapterError(casbin::error::AdapterError(Box::new(e))))?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{UcAuthorizer, Authorizer};
+    use uc_db::AnyPool;
+    use uc_types::Privilege;
+    use uuid::Uuid;
+
+    async fn in_memory_sqlite() -> AnyPool {
+        let pool = AnyPool::connect("sqlite::memory:")
+            .await
+            .unwrap();
+        uc_db::pool::run_migrations(&pool).await.unwrap();
+        pool
+    }
+
+    /// Grant a privilege, simulate restart by creating a fresh authorizer
+    /// backed by the same DB, then verify the privilege is still enforced.
+    /// This is the regression test for the load_policy sec/"" bug.
+    #[tokio::test]
+    async fn policies_survive_restart() {
+        let pool = in_memory_sqlite().await;
+
+        let principal = Uuid::new_v4();
+        let resource = Uuid::new_v4();
+
+        // First "run" — grant Owner
+        let auth1 = UcAuthorizer::new_with_db(pool.clone()).await.unwrap();
+        auth1.grant(principal, resource, Privilege::Owner).await.unwrap();
+        assert!(auth1.authorize(principal, resource, Privilege::Owner).await.unwrap());
+
+        // Simulate restart — new authorizer, same DB
+        let auth2 = UcAuthorizer::new_with_db(pool.clone()).await.unwrap();
+        assert!(
+            auth2.authorize(principal, resource, Privilege::Owner).await.unwrap(),
+            "Owner privilege must survive a restart (load_policy must use correct sec key)"
+        );
+    }
+
+    #[tokio::test]
+    async fn create_catalog_allowed_for_metastore_owner_after_restart() {
+        let pool = in_memory_sqlite().await;
+
+        let admin = Uuid::new_v4();
+        let metastore = Uuid::new_v4();
+
+        let auth1 = UcAuthorizer::new_with_db(pool.clone()).await.unwrap();
+        auth1.grant(admin, metastore, Privilege::Owner).await.unwrap();
+
+        // Simulate restart
+        let auth2 = UcAuthorizer::new_with_db(pool.clone()).await.unwrap();
+        let allowed = auth2.authorize_any(admin, metastore, &[Privilege::CreateCatalog, Privilege::Owner]).await.unwrap();
+        assert!(allowed, "Admin with Owner on metastore must be allowed to create catalogs after restart");
     }
 }
