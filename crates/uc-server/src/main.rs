@@ -121,12 +121,16 @@ async fn main() -> anyhow::Result<()> {
     std::fs::write(args.config_dir.join("token.txt"), &token)
         .context("Failed to write token.txt")?;
 
-    // ── 7. OIDC setup (optional) ──────────────────────────────────────────────
-    let oidc_config = if let Some(ref issuer) = args.oidc_issuer {
-        let jwks = fetch_oidc_jwks(issuer).await
-            .context("Failed to fetch OIDC JWKS")?;
-        info!("OIDC auth enabled, issuer: {}", issuer);
-        Some(Arc::new(OidcConfig { issuer: issuer.clone(), jwks }))
+    // ── 7. OIDC setup (optional; skipped when --no-auth) ─────────────────────
+    let oidc_config = if !args.no_auth {
+        if let Some(ref issuer) = args.oidc_issuer {
+            let jwks = fetch_oidc_jwks(issuer).await
+                .context("Failed to fetch OIDC JWKS")?;
+            info!("OIDC auth enabled, issuer: {}", issuer);
+            Some(Arc::new(OidcConfig { issuer: issuer.clone(), jwks }))
+        } else {
+            None
+        }
     } else {
         None
     };
@@ -171,7 +175,17 @@ async fn main() -> anyhow::Result<()> {
 async fn fetch_oidc_jwks(issuer: &str) -> anyhow::Result<JwkSet> {
     let issuer = issuer.trim_end_matches('/');
     let discovery_url = format!("{issuer}/.well-known/openid-configuration");
-    let client = reqwest::Client::new();
+
+    // In-cluster: load the k8s CA cert from the automounted SA volume so reqwest/rustls
+    // can verify the k3s API server's self-signed cert without --oidc-insecure.
+    let mut builder = reqwest::Client::builder();
+    if let Ok(pem) = std::fs::read("/var/run/secrets/kubernetes.io/serviceaccount/ca.crt") {
+        if let Ok(cert) = reqwest::Certificate::from_pem(&pem) {
+            builder = builder.add_root_certificate(cert);
+        }
+    }
+    let client = builder.build().context("Failed to build HTTP client")?;
+
     let discovery: serde_json::Value = client
         .get(&discovery_url)
         .send()
