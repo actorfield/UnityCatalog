@@ -3,7 +3,11 @@
 mod common;
 use common::*;
 use axum::http::StatusCode;
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+use base64::Engine;
 use serde_json::json;
+use std::sync::Arc;
+use uc_auth::OidcConfig;
 
 async fn setup(app: &axum::Router) {
     post(app, &format!("{UC}/catalogs"), json!({"name":"misc_cat"})).await;
@@ -217,4 +221,66 @@ async fn unknown_route_returns_404() {
     let (app, _) = build_test_app().await;
     let (s, _) = get(&app, "/nonexistent/route/xyz").await;
     assert_eq!(s, StatusCode::NOT_FOUND);
+}
+
+// ── OIDC middleware ───────────────────────────────────────────────────────────
+
+fn hs_oidc_config(secret: &[u8], issuer: &str) -> Arc<OidcConfig> {
+    let k = URL_SAFE_NO_PAD.encode(secret);
+    let jwks = serde_json::from_value(
+        serde_json::json!({ "keys": [{ "kty": "oct", "k": k, "alg": "HS256" }] })
+    ).unwrap();
+    Arc::new(OidcConfig { issuer: issuer.to_string(), jwks })
+}
+
+fn hs_bearer(secret: &[u8], issuer: &str, sub: &str, exp_delta: i64) -> String {
+    use jsonwebtoken::{encode, EncodingKey, Header};
+    use jsonwebtoken::Algorithm;
+    let now = chrono::Utc::now().timestamp();
+    let claims = serde_json::json!({
+        "sub": sub, "iss": issuer,
+        "iat": now, "exp": now + exp_delta
+    });
+    encode(&Header::new(Algorithm::HS256), &claims, &EncodingKey::from_secret(secret)).unwrap()
+}
+
+#[tokio::test]
+async fn oidc_bearer_accepted_when_configured() {
+    let secret = b"oidc-middleware-test-secret-32bytes!";
+    let issuer = "https://kubernetes.default.svc";
+    let oidc = hs_oidc_config(secret, issuer);
+    let app = build_auth_test_app(Some(oidc)).await;
+    let token = hs_bearer(secret, issuer, "system:serviceaccount:example:sa-cp-demo", 3600);
+    // Root endpoint is publicly accessible — use it to prove the middleware passes the OIDC token
+    let (s, _) = get_bearer(&app, "/", &token).await;
+    assert_ne!(s, StatusCode::UNAUTHORIZED, "OIDC token should be accepted");
+}
+
+#[tokio::test]
+async fn oidc_wrong_issuer_rejected_by_middleware() {
+    let secret = b"oidc-middleware-test-secret-32bytes!";
+    let oidc = hs_oidc_config(secret, "https://kubernetes.default.svc");
+    let app = build_auth_test_app(Some(oidc)).await;
+    // Token issued by a different issuer
+    let token = hs_bearer(secret, "https://attacker.example.com", "attacker", 3600);
+    let (s, _) = get_bearer(&app, &format!("{UC}/catalogs"), &token).await;
+    assert_eq!(s, StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn no_token_rejected_when_auth_enabled() {
+    let app = build_auth_test_app(None).await;
+    let (s, _) = get(&app, &format!("{UC}/catalogs")).await;
+    assert_eq!(s, StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn oidc_expired_token_rejected_by_middleware() {
+    let secret = b"oidc-middleware-test-secret-32bytes!";
+    let issuer = "https://kubernetes.default.svc";
+    let oidc = hs_oidc_config(secret, issuer);
+    let app = build_auth_test_app(Some(oidc)).await;
+    let token = hs_bearer(secret, issuer, "sa-cp-demo", -300); // expired 5 min ago, outside 60s leeway
+    let (s, _) = get_bearer(&app, &format!("{UC}/catalogs"), &token).await;
+    assert_eq!(s, StatusCode::UNAUTHORIZED);
 }

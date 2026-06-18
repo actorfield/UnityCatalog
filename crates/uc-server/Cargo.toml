@@ -35,3 +35,4 @@ rsa = { workspace = true }
 rand = { workspace = true }
 base64 = { workspace = true }
 hex = { workspace = true }
+reqwest = { workspace = true }

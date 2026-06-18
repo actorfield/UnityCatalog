@@ -1,5 +1,5 @@
 use std::sync::Arc;
-use uc_auth::{Authorizer, JwtConfig};
+use uc_auth::{Authorizer, JwtConfig, OidcConfig};
 use uc_credentials::CloudCredentialVendor;
 use uc_db::AnyPool;
 use uuid::Uuid;
@@ -14,6 +14,8 @@ pub struct AppState {
     pub metastore_id: Uuid,
     pub auth_enabled: bool,
     pub config_dir: std::path::PathBuf,
+    /// When set, Bearer tokens issued by the configured OIDC issuer are also accepted.
+    pub oidc_config: Option<Arc<OidcConfig>>,
 }
 
 impl AppState {
@@ -25,6 +27,7 @@ impl AppState {
         metastore_id: Uuid,
         auth_enabled: bool,
         config_dir: std::path::PathBuf,
+        oidc_config: Option<Arc<OidcConfig>>,
     ) -> Self {
         Self {
             pool: Arc::new(pool),
@@ -34,6 +37,7 @@ impl AppState {
             metastore_id,
             auth_enabled,
             config_dir,
+            oidc_config,
         }
     }
 }

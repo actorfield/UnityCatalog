@@ -9,7 +9,7 @@ use uc_api::{
     middleware::auth_middleware,
     state::AppState,
 };
-use uc_auth::{AllowingAuthorizer, JwtConfig, KeyManager, UcAuthorizer};
+use uc_auth::{AllowingAuthorizer, JwkSet, JwtConfig, KeyManager, OidcConfig, UcAuthorizer};
 use uc_credentials::CloudCredentialVendor;
 use uc_db::{pool::run_migrations, AnyPool, repos::{MetastoreRepo, UserRepo}};
 use uuid::Uuid;
@@ -19,23 +19,25 @@ use uuid::Uuid;
 #[derive(Parser, Debug)]
 #[command(name = "uc-server", about = "Unity Catalog server (Rust)")]
 struct Args {
-    /// Port to listen on
     #[arg(long, default_value_t = 8080)]
     port: u16,
 
-    /// Path to configuration directory (contains server.properties, certs, DB)
     #[arg(long, default_value = "./etc/conf")]
     config_dir: PathBuf,
 
-    /// Database URL (sqlite:./etc/db/uc.db or postgres://...)
     #[arg(long, default_value = "sqlite:./etc/db/uc.db?mode=rwc")]
     database_url: String,
 
-    /// Disable authorization (allow all requests)
+    /// Disable authorization (allow all requests). Use only in dev/testing.
     #[arg(long, default_value_t = false)]
     no_auth: bool,
 
-    /// Log level: error, warn, info, debug, trace (or RUST_LOG env var)
+    /// OIDC issuer URL. When set, Bearer tokens issued by this issuer are
+    /// accepted via JWKS validation (fetched from {issuer}/.well-known/...).
+    /// Intended for in-cluster K8s SA projected tokens.
+    #[arg(long)]
+    oidc_issuer: Option<String>,
+
     #[arg(long, default_value = "info")]
     log_level: String,
 }
@@ -46,11 +48,10 @@ struct Args {
 async fn main() -> anyhow::Result<()> {
     let args = Args::parse();
 
-    // #1407: log level configurable via --log-level or RUST_LOG env var
     tracing_subscriber::registry()
         .with(tracing_subscriber::EnvFilter::try_from_default_env()
             .unwrap_or_else(|_| format!("uc_server={l},uc_api={l},uc_db={l}", l = args.log_level).into()))
-        .with(tracing_subscriber::fmt::layer())
+        .with(tracing_subscriber::fmt::layer().with_ansi(false))
         .init();
 
     info!("Starting Unity Catalog server on port {}", args.port);
@@ -102,7 +103,8 @@ async fn main() -> anyhow::Result<()> {
     let admin_email = "admin@unitycatalog.io";
     if !args.no_auth {
         if UserRepo::get_by_email(&pool, admin_email).await?.is_none() {
-            let admin_id = Uuid::new_v4();
+            // UUIDv7: time-ordered — encodes when this admin user was created
+            let admin_id = Uuid::now_v7();
             let now = chrono::Utc::now().timestamp_millis();
             UserRepo::create(&pool, admin_id, admin_email, Some(admin_email), None, "ENABLED", now).await
                 .context("Failed to create admin user")?;
@@ -112,17 +114,24 @@ async fn main() -> anyhow::Result<()> {
         }
     }
 
-    // Write token.txt AFTER admin user exists — uses ACCESS token so middleware
-    // performs the normal user DB lookup (admin@unitycatalog.io must be in uc_users).
-    // The SERVICE token bypass path in middleware is intentionally not used for token.txt;
-    // instead, we ensure the admin user is always created first to avoid the startup race.
+    // ── 6. Admin token (write to config_dir for local dev convenience) ────────
     let token_claims = uc_auth::jwt::UcClaims::new_access(admin_email);
     let token = uc_auth::jwt::encode_token(&jwt_config, &token_claims)
         .context("Failed to create admin token")?;
     std::fs::write(args.config_dir.join("token.txt"), &token)
         .context("Failed to write token.txt")?;
 
-    // ── 6. App state ──────────────────────────────────────────────────────────
+    // ── 7. OIDC setup (optional) ──────────────────────────────────────────────
+    let oidc_config = if let Some(ref issuer) = args.oidc_issuer {
+        let jwks = fetch_oidc_jwks(issuer).await
+            .context("Failed to fetch OIDC JWKS")?;
+        info!("OIDC auth enabled, issuer: {}", issuer);
+        Some(Arc::new(OidcConfig { issuer: issuer.clone(), jwks }))
+    } else {
+        None
+    };
+
+    // ── 8. App state ──────────────────────────────────────────────────────────
     let state = AppState::new(
         pool,
         authorizer,
@@ -131,9 +140,10 @@ async fn main() -> anyhow::Result<()> {
         metastore_id,
         !args.no_auth,
         args.config_dir.clone(),
+        oidc_config,
     );
 
-    // ── 7. Router assembly ────────────────────────────────────────────────────
+    // ── 9. Router assembly ────────────────────────────────────────────────────
     let app = Router::new()
         .merge(catalog_api::router(state.clone()))
         .merge(control_api::router(state.clone()))
@@ -141,7 +151,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/", axum::routing::get(|| async { "Hello, Unity Catalog!" }))
         .layer(axum::middleware::from_fn_with_state(state.clone(), auth_middleware));
 
-    // ── 8. Bind and serve ─────────────────────────────────────────────────────
+    // ── 10. Bind and serve ────────────────────────────────────────────────────
     let addr = SocketAddr::from(([0, 0, 0, 0], args.port));
     info!("Listening on {}", addr);
 
@@ -154,4 +164,32 @@ async fn main() -> anyhow::Result<()> {
         .context("Server error")?;
 
     Ok(())
+}
+
+// ── OIDC JWKS discovery ───────────────────────────────────────────────────────
+
+async fn fetch_oidc_jwks(issuer: &str) -> anyhow::Result<JwkSet> {
+    let issuer = issuer.trim_end_matches('/');
+    let discovery_url = format!("{issuer}/.well-known/openid-configuration");
+    let client = reqwest::Client::new();
+    let discovery: serde_json::Value = client
+        .get(&discovery_url)
+        .send()
+        .await
+        .context("OIDC discovery request failed")?
+        .json()
+        .await
+        .context("OIDC discovery response not valid JSON")?;
+    let jwks_uri = discovery["jwks_uri"]
+        .as_str()
+        .ok_or_else(|| anyhow::anyhow!("OIDC discovery response missing 'jwks_uri'"))?;
+    let jwks: JwkSet = client
+        .get(jwks_uri)
+        .send()
+        .await
+        .context("JWKS fetch failed")?
+        .json()
+        .await
+        .context("JWKS response not valid JSON")?;
+    Ok(jwks)
 }

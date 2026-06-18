@@ -11,7 +11,7 @@ use axum::body::to_bytes;
 use serde_json::Value;
 use std::sync::Arc;
 use tower::ServiceExt;
-use uc_auth::{AllowingAuthorizer, JwtConfig, KeyManager};
+use uc_auth::{AllowingAuthorizer, JwtConfig, KeyManager, OidcConfig};
 use uc_credentials::CloudCredentialVendor;
 use uc_db::{pool::run_migrations, AnyPool};
 use uc_api::{
@@ -44,6 +44,7 @@ pub async fn build_test_app() -> (Router, AnyPool) {
         metastore.id,
         false, // no-auth
         config_dir,
+        None,  // no OIDC in tests
     );
 
     let app = Router::new()
@@ -119,3 +120,53 @@ pub async fn delete_with_query(app: &Router, uri: &str, query: &str) -> StatusCo
 pub const UC: &str = "/api/2.1/unity-catalog";
 pub const CTRL: &str = "/api/1.0/unity-control";
 pub const DELTA: &str = "/delta/v1";
+
+/// Build a test app with auth ENABLED and an optional OIDC config.
+/// Uses AllowingAuthorizer so permission checks always pass.
+pub async fn build_auth_test_app(oidc_config: Option<Arc<OidcConfig>>) -> Router {
+    let pool = AnyPool::connect("sqlite::memory:").await.expect("in-memory sqlite");
+    run_migrations(&pool).await.expect("migrations");
+
+    let metastore = uc_db::repos::MetastoreRepo::get_or_init(&pool, "auth-test-metastore")
+        .await
+        .expect("metastore init");
+
+    let config_dir = std::env::temp_dir().join(format!("uc_auth_test_{}", uuid::Uuid::now_v7()));
+    std::fs::create_dir_all(&config_dir).expect("create config dir");
+    let km = KeyManager::load_or_generate(&config_dir).expect("key gen");
+    let jwt_config = JwtConfig::from_der(&km.private_key_der, &km.public_key_der, km.key_id.clone())
+        .expect("jwt config");
+
+    let state = AppState::new(
+        pool,
+        Arc::new(AllowingAuthorizer),
+        CloudCredentialVendor::new(),
+        jwt_config,
+        metastore.id,
+        true, // auth enabled
+        config_dir,
+        oidc_config,
+    );
+
+    Router::new()
+        .merge(catalog_api::router(state.clone()))
+        .merge(control_api::router(state.clone()))
+        .merge(delta_api::router(state.clone()))
+        .route("/", axum::routing::get(|| async { "ok" }))
+        .layer(axum::middleware::from_fn_with_state(state.clone(), auth_middleware))
+}
+
+/// Send a GET with an explicit Authorization: Bearer header.
+pub async fn get_bearer(app: &Router, uri: &str, token: &str) -> (StatusCode, Value) {
+    let req = Request::builder()
+        .uri(uri)
+        .header(header::CONTENT_TYPE, "application/json")
+        .header(header::AUTHORIZATION, format!("Bearer {token}"))
+        .body(Body::empty())
+        .unwrap();
+    let res = app.clone().oneshot(req).await.unwrap();
+    let status = res.status();
+    let body = to_bytes(res.into_body(), usize::MAX).await.unwrap();
+    let json: Value = serde_json::from_slice(&body).unwrap_or(Value::Null);
+    (status, json)
+}

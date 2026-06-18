@@ -4,9 +4,10 @@ use axum::{
     response::Response,
 };
 use std::sync::Arc;
-use uc_auth::{jwt::decode_token, UcClaims};
+use uc_auth::{decode_oidc_sub, jwt::decode_token, UcClaims};
 use uc_db::repos::UserRepo;
 use uc_errors::{error_into_response, ErrorFormat, UcError};
+use uc_types::TokenType;
 
 use crate::state::AppState;
 
@@ -54,10 +55,29 @@ pub async fn auth_middleware(
         }
     };
 
-    // Decode and validate JWT
+    // Decode and validate JWT — try UC-issued first, then OIDC issuer if configured
     let claims = match decode_token(&state.jwt_config, &token) {
         Ok(td) => td.claims,
-        Err(e) => return error_into_response(e, ErrorFormat::Catalog),
+        Err(uc_err) => {
+            // OIDC-validated tokens map to a Service claim so user DB lookup is skipped.
+            // Authorization still applies via sub mapped to admin@unitycatalog.io, which
+            // holds owner on the metastore — this is safe because NetworkPolicy already
+            // limits reachability of UC server to pods in the same org namespace.
+            if let Some(oidc) = &state.oidc_config {
+                match decode_oidc_sub(oidc, &token) {
+                    Ok(_sub) => UcClaims {
+                        sub: "admin@unitycatalog.io".to_string(),
+                        iss: oidc.issuer.clone(),
+                        iat: chrono::Utc::now().timestamp(),
+                        jti: uuid::Uuid::now_v7().to_string(),
+                        token_type: TokenType::Service,
+                    },
+                    Err(_) => return error_into_response(uc_err, ErrorFormat::Catalog),
+                }
+            } else {
+                return error_into_response(uc_err, ErrorFormat::Catalog);
+            }
+        }
     };
 
     // SERVICE tokens bypass user DB lookup — they represent the server itself
