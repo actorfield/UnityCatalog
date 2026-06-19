@@ -4,14 +4,14 @@ use clap::Parser;
 use std::{net::SocketAddr, path::PathBuf, sync::Arc};
 use tracing::info;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
-use uc_api::{
-    catalog_api, control_api, delta_api,
-    middleware::auth_middleware,
-    state::AppState,
-};
+use uc_api::{catalog_api, control_api, delta_api, middleware::auth_middleware, state::AppState};
 use uc_auth::{AllowingAuthorizer, JwkSet, JwtConfig, KeyManager, OidcConfig, UcAuthorizer};
 use uc_credentials::CloudCredentialVendor;
-use uc_db::{pool::run_migrations, AnyPool, repos::{MetastoreRepo, UserRepo}};
+use uc_db::{
+    pool::run_migrations,
+    repos::{MetastoreRepo, UserRepo},
+    AnyPool,
+};
 use uuid::Uuid;
 
 // ── CLI args ──────────────────────────────────────────────────────────────────
@@ -49,28 +49,38 @@ async fn main() -> anyhow::Result<()> {
     let args = Args::parse();
 
     tracing_subscriber::registry()
-        .with(tracing_subscriber::EnvFilter::try_from_default_env()
-            .unwrap_or_else(|_| format!("uc_server={l},uc_api={l},uc_db={l}", l = args.log_level).into()))
+        .with(
+            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| {
+                format!("uc_server={l},uc_api={l},uc_db={l}", l = args.log_level).into()
+            }),
+        )
         .with(tracing_subscriber::fmt::layer().with_ansi(false))
         .init();
 
     info!("Starting Unity Catalog server on port {}", args.port);
     info!("Config dir: {}", args.config_dir.display());
     info!("Database:   {}", args.database_url);
-    info!("Auth:       {}", if args.no_auth { "disabled" } else { "enabled" });
+    info!(
+        "Auth:       {}",
+        if args.no_auth { "disabled" } else { "enabled" }
+    );
 
     // ── 1. RSA key initialization ─────────────────────────────────────────────
-    let key_manager = KeyManager::load_or_generate(&args.config_dir)
-        .context("Failed to initialize RSA keys")?;
+    let key_manager =
+        KeyManager::load_or_generate(&args.config_dir).context("Failed to initialize RSA keys")?;
     let jwt_config = JwtConfig::from_der(
         &key_manager.private_key_der,
         &key_manager.public_key_der,
         key_manager.key_id.clone(),
-    ).context("Failed to create JWT config")?;
+    )
+    .context("Failed to create JWT config")?;
 
     // ── 2. Database pool + migrations ─────────────────────────────────────────
-    std::fs::create_dir_all("./etc/db").ok();
-    let pool = AnyPool::connect(&args.database_url)
+    let (actual_db_url, s3_info) = prepare_database_url(&args.config_dir, &args.database_url)
+        .await
+        .context("Failed to prepare database URL")?;
+
+    let pool = AnyPool::connect(&actual_db_url)
         .await
         .context("Failed to connect to database")?;
 
@@ -106,9 +116,20 @@ async fn main() -> anyhow::Result<()> {
             // UUIDv7: time-ordered — encodes when this admin user was created
             let admin_id = Uuid::now_v7();
             let now = chrono::Utc::now().timestamp_millis();
-            UserRepo::create(&pool, admin_id, admin_email, Some(admin_email), None, "ENABLED", now).await
-                .context("Failed to create admin user")?;
-            authorizer.grant(admin_id, metastore_id, uc_types::Privilege::Owner).await
+            UserRepo::create(
+                &pool,
+                admin_id,
+                admin_email,
+                Some(admin_email),
+                None,
+                "ENABLED",
+                now,
+            )
+            .await
+            .context("Failed to create admin user")?;
+            authorizer
+                .grant(admin_id, metastore_id, uc_types::Privilege::Owner)
+                .await
                 .context("Failed to grant admin OWNER on metastore")?;
             info!("Created admin user: {}", admin_email);
         }
@@ -124,10 +145,14 @@ async fn main() -> anyhow::Result<()> {
     // ── 7. OIDC setup (optional; skipped when --no-auth) ─────────────────────
     let oidc_config = if !args.no_auth {
         if let Some(ref issuer) = args.oidc_issuer {
-            let jwks = fetch_oidc_jwks(issuer).await
+            let jwks = fetch_oidc_jwks(issuer)
+                .await
                 .context("Failed to fetch OIDC JWKS")?;
             info!("OIDC auth enabled, issuer: {}", issuer);
-            Some(Arc::new(OidcConfig { issuer: issuer.clone(), jwks }))
+            Some(Arc::new(OidcConfig {
+                issuer: issuer.clone(),
+                jwks,
+            }))
         } else {
             None
         }
@@ -152,8 +177,14 @@ async fn main() -> anyhow::Result<()> {
         .merge(catalog_api::router(state.clone()))
         .merge(control_api::router(state.clone()))
         .merge(delta_api::router(state.clone()))
-        .route("/", axum::routing::get(|| async { "Hello, Unity Catalog!" }))
-        .layer(axum::middleware::from_fn_with_state(state.clone(), auth_middleware));
+        .route(
+            "/",
+            axum::routing::get(|| async { "Hello, Unity Catalog!" }),
+        )
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            auth_middleware,
+        ));
 
     // ── 10. Bind and serve ────────────────────────────────────────────────────
     let addr = SocketAddr::from(([0, 0, 0, 0], args.port));
@@ -163,12 +194,144 @@ async fn main() -> anyhow::Result<()> {
         .await
         .context("Failed to bind to port")?;
 
-    axum::serve(listener, app)
-        .await
-        .context("Server error")?;
+    let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
+    if let Some(ref s3_info) = s3_info {
+        let s3_client = build_s3_client().ok();
+        let bucket = s3_info.bucket.clone();
+        let key = s3_info.key.clone();
+        let local_path = s3_info.local_path.clone();
+        tokio::spawn(async move {
+            let _ = shutdown_rx.await;
+            if let Some(client) = s3_client {
+                let endpoint = std::env::var("AWS_ENDPOINT_URL").unwrap_or_default();
+                let url = if endpoint.is_empty() {
+                    format!("https://{bucket}.s3.amazonaws.com/{key}")
+                } else {
+                    format!("{endpoint}/{bucket}/{key}")
+                };
+                if let Ok(data) = tokio::fs::read(&local_path).await {
+                    let _ = client.put(&url).body(data).send().await;
+                    info!("Uploaded metadata DB to s3://{bucket}/{key}");
+                }
+            }
+        });
+    }
 
+    axum::serve(listener, app).await.context("Server error")?;
+
+    let _ = shutdown_tx.send(());
     Ok(())
 }
+
+// ── S3-backed SQLite support ────────────────────────────────────────────────────
+
+#[allow(dead_code)]
+struct S3Info {
+    bucket: String,
+    pub key: String,
+    pub local_path: PathBuf,
+}
+
+async fn prepare_database_url(
+    config_dir: &PathBuf,
+    url: &str,
+) -> anyhow::Result<(String, Option<S3Info>)> {
+    let Some(stripped) = url.strip_prefix("s3://") else {
+        std::fs::create_dir_all("./etc/db").ok();
+        return Ok((url.to_string(), None));
+    };
+
+    let (bucket, key) = match stripped.split_once('/') {
+        Some((b, k)) => (b.to_string(), k.to_string()),
+        None => anyhow::bail!("Invalid s3:// URL: expected s3://bucket/key, got {url}"),
+    };
+
+    let s3_client = build_s3_client()?;
+    let local_dir = config_dir.join("db");
+    std::fs::create_dir_all(&local_dir)?;
+    let local_path = local_dir.join(format!("uc-{}.db", sanitize_filename(&key)));
+
+    download_from_s3(&s3_client, &bucket, &key, &local_path).await?;
+    info!("Downloaded metadata DB from s3://{bucket}/{key}");
+
+    let sqlite_url = format!("sqlite:{}?mode=rwc", local_path.display());
+    Ok((
+        sqlite_url,
+        Some(S3Info {
+            bucket,
+            key,
+            local_path,
+        }),
+    ))
+}
+
+fn build_s3_client() -> anyhow::Result<reqwest::Client> {
+    let endpoint = std::env::var("AWS_ENDPOINT_URL").unwrap_or_default();
+    let key_id = std::env::var("AWS_ACCESS_KEY_ID").unwrap_or_default();
+    let secret = std::env::var("AWS_SECRET_ACCESS_KEY").unwrap_or_default();
+
+    let mut builder = reqwest::Client::builder();
+    if !endpoint.is_empty() {
+        let auth = format!("{}:{}", key_id, secret);
+        let encoded = base64_encode(&auth);
+        let header_value = format!("Basic {encoded}");
+        let mut headers = reqwest::header::HeaderMap::new();
+        if let Ok(hv) = reqwest::header::HeaderValue::from_str(&header_value) {
+            headers.insert(reqwest::header::AUTHORIZATION, hv);
+        }
+        builder = builder.default_headers(headers);
+    }
+    Ok(builder.build()?)
+}
+
+async fn download_from_s3(
+    client: &reqwest::Client,
+    bucket: &str,
+    key: &str,
+    local_path: &std::path::Path,
+) -> anyhow::Result<()> {
+    if local_path.exists() {
+        return Ok(());
+    }
+    let endpoint = std::env::var("AWS_ENDPOINT_URL").unwrap_or_default();
+    let url = if endpoint.is_empty() {
+        format!("https://{bucket}.s3.amazonaws.com/{key}")
+    } else {
+        format!("{endpoint}/{bucket}/{key}")
+    };
+    let resp = client.get(&url).send().await?;
+    if resp.status().is_success() {
+        let bytes = resp.bytes().await?;
+        tokio::fs::write(local_path, &bytes).await?;
+    }
+    Ok(())
+}
+
+fn sanitize_filename(key: &str) -> String {
+    key.replace('/', "_")
+}
+
+fn base64_encode(input: &str) -> String {
+    let mut buf = Vec::new();
+    for chunk in input.as_bytes().chunks(3) {
+        let b0 = chunk[0];
+        let b1 = if chunk.len() > 1 { chunk[1] } else { 0 };
+        let b2 = if chunk.len() > 2 { chunk[2] } else { 0 };
+        let n = (b0 as u32) << 16 | (b1 as u32) << 8 | (b2 as u32);
+        buf.push(ENC_TABLE[((n >> 18) & 63) as usize]);
+        buf.push(ENC_TABLE[((n >> 12) & 63) as usize]);
+        buf.push(ENC_TABLE[((n >> 6) & 63) as usize]);
+        buf.push(ENC_TABLE[(n & 63) as usize]);
+    }
+    let padding = (3 - input.as_bytes().len() % 3) % 3;
+    for _ in 0..padding {
+        buf.pop();
+        buf.push(b'=');
+    }
+    String::from_utf8(buf).unwrap()
+}
+
+const ENC_TABLE: [u8; 64] = *b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 
 // ── OIDC JWKS discovery ───────────────────────────────────────────────────────
 
