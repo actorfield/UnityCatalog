@@ -41,6 +41,17 @@ impl CloudCredentialVendor {
         Self::default()
     }
 
+    /// Vendor that vends real AWS STS-assumed credentials for S3-scheme
+    /// locations (requires the `aws` feature). UC-server's own AWS
+    /// identity must be able to assume each StorageCredential's role_arn.
+    #[cfg(feature = "aws")]
+    pub fn with_aws() -> Self {
+        Self {
+            cache: Mutex::new(HashMap::new()),
+            aws: Some(AwsCredentialVendor::new(None)),
+        }
+    }
+
     pub async fn vend(&self, ctx: &CredentialContext) -> Result<TemporaryCredentials, UcError> {
         // Local filesystem — no credentials needed, skip cache
         if matches!(ctx.scheme, UriScheme::File | UriScheme::Null) {
@@ -137,7 +148,7 @@ impl AwsCredentialVendor {
         use aws_sdk_sts::Client;
         use uc_openapi::catalog::AwsCredentials;
 
-        let config = aws_config::load_from_env().await;
+        let config = aws_config::load_defaults(aws_config::BehaviorVersion::latest()).await;
         let sts_client = Client::new(&config);
 
         let role_arn = ctx.role_arn.as_deref()
@@ -163,7 +174,7 @@ impl AwsCredentialVendor {
                 access_key_id: creds.access_key_id().to_string(),
                 secret_access_key: creds.secret_access_key().to_string(),
                 session_token: creds.session_token().to_string(),
-                expiration: creds.expiration().map(|t| t.to_string()),
+                expiration: Some(creds.expiration().to_string()),
             }),
             ..Default::default()
         })

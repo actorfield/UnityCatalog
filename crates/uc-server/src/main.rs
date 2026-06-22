@@ -38,8 +38,35 @@ struct Args {
     #[arg(long)]
     oidc_issuer: Option<String>,
 
+    /// Vend real AWS STS-assumed credentials for S3-scheme storage
+    /// credentials (temporary-table/path-credentials APIs), instead of
+    /// returning Unimplemented for the S3 scheme. Requires this binary to
+    /// be built with `--features aws` and UC-server's own AWS identity to
+    /// have sts:AssumeRole permission on each StorageCredential's role_arn.
+    #[arg(long, default_value_t = false)]
+    enable_aws_credentials: bool,
+
     #[arg(long, default_value = "info")]
     log_level: String,
+}
+
+#[cfg(feature = "aws")]
+fn build_credential_vendor(enable_aws: bool) -> CloudCredentialVendor {
+    if enable_aws {
+        CloudCredentialVendor::with_aws()
+    } else {
+        CloudCredentialVendor::new()
+    }
+}
+
+#[cfg(not(feature = "aws"))]
+fn build_credential_vendor(enable_aws: bool) -> CloudCredentialVendor {
+    if enable_aws {
+        tracing::warn!(
+            "--enable-aws-credentials set but uc-server was not built with --features aws; ignoring"
+        );
+    }
+    CloudCredentialVendor::new()
 }
 
 // ── Entry point ───────────────────────────────────────────────────────────────
@@ -164,7 +191,7 @@ async fn main() -> anyhow::Result<()> {
     let state = AppState::new(
         pool,
         authorizer,
-        CloudCredentialVendor::new(),
+        build_credential_vendor(args.enable_aws_credentials),
         jwt_config,
         metastore_id,
         !args.no_auth,
