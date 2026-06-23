@@ -1,0 +1,10 @@
+# Exclude Rust build artifacts from Docker build context
+target/
+**/target/
+
+# IDE and misc
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
