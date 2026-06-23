@@ -5,13 +5,13 @@ use axum::{
 };
 use std::sync::Arc;
 use uc_auth::UcClaims;
-use uc_db::repos::{CatalogRepo, PropertyRepo, UserRepo};
+use uc_db::repos::{CatalogRepo, PropertyRepo};
 use uc_errors::UcError;
 use uc_openapi::catalog::{CatalogInfo, CreateCatalog, ListCatalogsResponse, UpdateCatalog};
 use uc_types::Privilege;
 use uuid::Uuid;
 
-use crate::{catalog_api::helpers::validate_sql_name, state::AppState};
+use crate::{catalog_api::helpers::{get_user, validate_sql_name}, state::AppState};
 
 #[derive(serde::Deserialize)]
 pub struct ListParams {
@@ -26,8 +26,7 @@ pub async fn create(
 ) -> Result<Json<CatalogInfo>, UcError> {
     // Auth: caller needs CREATE_CATALOG on the metastore
     if state.auth_enabled {
-        let user = UserRepo::get_by_email(&state.pool, &claims.sub).await?
-            .ok_or_else(|| UcError::unauthenticated("User not found"))?;
+        let user = get_user(&state, &claims.sub).await?;
         let allowed = state.authorizer.authorize_any(user.id, state.metastore_id, &[Privilege::CreateCatalog, Privilege::Owner]).await?;
         if !allowed {
             return Err(UcError::permission_denied("CREATE CATALOG privilege required on metastore"));
@@ -52,7 +51,7 @@ pub async fn create(
 
     // Grant OWNER to the creator
     if state.auth_enabled {
-        if let Some(user) = UserRepo::get_by_email(&state.pool, &claims.sub).await? {
+        if let Ok(user) = get_user(&state, &claims.sub).await {
             state.authorizer.grant(user.id, id, Privilege::Owner).await?;
             // Catalog is a child of the metastore in the hierarchy
             state.authorizer.add_hierarchy_child(state.metastore_id, id).await?;
@@ -136,8 +135,7 @@ pub async fn update(
 
     // Auth: OWNER on this catalog
     if state.auth_enabled {
-        let user = UserRepo::get_by_email(&state.pool, &claims.sub).await?
-            .ok_or_else(|| UcError::unauthenticated("User not found"))?;
+        let user = get_user(&state, &claims.sub).await?;
         let allowed = state.authorizer.authorize(user.id, existing.id, Privilege::Owner).await?;
         if !allowed {
             return Err(UcError::permission_denied("OWNER privilege required on catalog"));
@@ -188,8 +186,7 @@ pub async fn delete(
     let existing = CatalogRepo::get_by_name(&state.pool, &name).await?;
 
     if state.auth_enabled {
-        let user = UserRepo::get_by_email(&state.pool, &claims.sub).await?
-            .ok_or_else(|| UcError::unauthenticated("User not found"))?;
+        let user = get_user(&state, &claims.sub).await?;
         let allowed = state.authorizer.authorize(user.id, existing.id, Privilege::Owner).await?;
         if !allowed {
             return Err(UcError::permission_denied("OWNER privilege required on catalog"));

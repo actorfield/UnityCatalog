@@ -19,7 +19,7 @@ pub async fn create(State(state): State<AppState>, Extension(claims): Extension<
     let cred = CredentialRepo::get_by_name(&state.pool, &req.credential_name).await?;
     // Also require OWNER or CREATE_EXTERNAL_LOCATION on the referenced credential
     if state.auth_enabled {
-        if let Some(ref user_val) = uc_db::repos::UserRepo::get_by_email(&state.pool, &claims.sub).await? {
+        if let Ok(ref user_val) = get_user(&state, &claims.sub).await {
             require_any(&state, user_val.id, cred.id, &[uc_types::Privilege::Owner, uc_types::Privilege::CreateExternalLocation]).await?;
         }
     }

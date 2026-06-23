@@ -79,8 +79,13 @@ pub async fn patch_user(State(state): State<AppState>, Path(id): Path<String>, J
 }
 
 pub async fn get_me(State(state): State<AppState>, Extension(claims): Extension<Arc<UcClaims>>) -> Result<Json<UserResource>, UcError> {
-    // Try DB lookup first; if no-auth mode and user doesn't exist, return synthetic response
-    match UserRepo::get_by_email(&state.pool, &claims.sub).await? {
+    // Try DB lookup first (email, then external_id for OIDC-mapped principals);
+    // if no-auth mode and user doesn't exist, return synthetic response
+    let found = match UserRepo::get_by_email(&state.pool, &claims.sub).await? {
+        Some(u) => Some(u),
+        None => UserRepo::get_by_external_id(&state.pool, &claims.sub).await?,
+    };
+    match found {
         Some(user) => Ok(Json(UserResource {
             id: Some(user.id.to_string()), user_name: user.name.clone(), display_name: None,
             emails: None, name: None, active: Some(user.is_enabled()), external_id: user.external_id,
@@ -94,8 +99,12 @@ pub async fn get_me(State(state): State<AppState>, Extension(claims): Extension<
 }
 
 pub async fn patch_me(State(state): State<AppState>, Extension(claims): Extension<Arc<UcClaims>>, Json(req): Json<ScimPatchOp>) -> Result<Json<UserResource>, UcError> {
-    // Apply SCIM PATCH to the current user
-    if let Some(user) = UserRepo::get_by_email(&state.pool, &claims.sub).await? {
+    // Apply SCIM PATCH to the current user (email, then external_id for OIDC-mapped principals)
+    let found = match UserRepo::get_by_email(&state.pool, &claims.sub).await? {
+        Some(u) => Some(u),
+        None => UserRepo::get_by_external_id(&state.pool, &claims.sub).await?,
+    };
+    if let Some(user) = found {
         let mut new_state: Option<String> = None;
         for op in &req.operations {
             if op.op.to_lowercase() == "replace" {

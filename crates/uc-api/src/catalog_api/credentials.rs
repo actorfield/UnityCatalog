@@ -25,7 +25,7 @@ pub async fn create(State(state): State<AppState>, Extension(claims): Extension<
         created_by: auth_sub(&state, &claims).map(String::from), updated_at: None, updated_by: None };
     let created = CredentialRepo::create(&state.pool, &row).await?;
     if state.auth_enabled {
-        if let Some(user) = uc_db::repos::UserRepo::get_by_email(&state.pool, &claims.sub).await? {
+        if let Ok(user) = get_user(&state, &claims.sub).await {
             state.authorizer.grant(user.id, id, Privilege::Owner).await?;
         }
     }

@@ -59,18 +59,21 @@ pub async fn auth_middleware(
     let claims = match decode_token(&state.jwt_config, &token) {
         Ok(td) => td.claims,
         Err(uc_err) => {
-            // OIDC-validated tokens map to a Service claim so user DB lookup is skipped.
-            // Authorization still applies via sub mapped to admin@unitycatalog.io, which
-            // holds owner on the metastore — this is safe because NetworkPolicy already
-            // limits reachability of UC server to pods in the same org namespace.
+            // OIDC-validated tokens map to a per-caller principal so distinct
+            // identities (e.g. each K8s ServiceAccount) aren't collapsed into a
+            // single shared admin principal. Each external `sub` resolves to its
+            // own (lazily-created, zero-grant) uc_users row.
             if let Some(oidc) = &state.oidc_config {
                 match decode_oidc_sub(oidc, &token) {
-                    Ok(_sub) => UcClaims {
-                        sub: "admin@unitycatalog.io".to_string(),
-                        iss: oidc.issuer.clone(),
-                        iat: chrono::Utc::now().timestamp(),
-                        jti: uuid::Uuid::now_v7().to_string(),
-                        token_type: TokenType::Service,
+                    Ok(sub) => match UserRepo::find_or_create_by_external_id(&state.pool, &sub).await {
+                        Ok(row) => UcClaims {
+                            sub: row.email.unwrap_or_else(|| row.external_id.clone().unwrap_or(sub)),
+                            iss: oidc.issuer.clone(),
+                            iat: chrono::Utc::now().timestamp(),
+                            jti: uuid::Uuid::now_v7().to_string(),
+                            token_type: TokenType::Service,
+                        },
+                        Err(e) => return error_into_response(e, ErrorFormat::Catalog),
                     },
                     Err(_) => return error_into_response(uc_err, ErrorFormat::Catalog),
                 }

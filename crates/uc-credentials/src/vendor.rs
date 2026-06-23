@@ -110,7 +110,11 @@ fn make_cache_key(ctx: &CredentialContext) -> String {
     let role = ctx.role_arn.as_deref().unwrap_or("");
     let mut locs = ctx.locations.clone();
     locs.sort();
-    format!("{}::{}", role, locs.join(","))
+    // Operation must be part of the key: the vended STS credentials themselves
+    // don't differ by operation in this implementation, but the presigned `url`
+    // does (PUT vs GET) -- without this, a READ request for a path previously
+    // vended as ReadWrite would incorrectly be served a cached write-style URL.
+    format!("{}::{}::{:?}", role, locs.join(","), ctx.operation)
 }
 
 /// Parse expiry from the credential's expiration field (RFC3339 string).
@@ -169,15 +173,115 @@ impl AwsCredentialVendor {
         let creds = response.credentials()
             .ok_or_else(|| UcError::new(ErrorCode::Internal, "STS returned no credentials"))?;
 
+        let access_key_id = creds.access_key_id().to_string();
+        let secret_access_key = creds.secret_access_key().to_string();
+        let session_token = creds.session_token().to_string();
+        let expiration = creds.expiration().to_string();
+
+        // Presign a native S3 URL for the requested location using the
+        // just-assumed temporary credentials — additive to aws_temp_credentials.
+        let presigned_url = presign_s3_url(
+            &config,
+            &access_key_id,
+            &secret_access_key,
+            &session_token,
+            ctx,
+        )
+        .await;
+
         Ok(TemporaryCredentials {
             aws_temp_credentials: Some(AwsCredentials {
-                access_key_id: creds.access_key_id().to_string(),
-                secret_access_key: creds.secret_access_key().to_string(),
-                session_token: creds.session_token().to_string(),
-                expiration: Some(creds.expiration().to_string()),
+                access_key_id,
+                secret_access_key,
+                session_token,
+                expiration: Some(expiration),
             }),
+            url: presigned_url,
             ..Default::default()
         })
+    }
+}
+
+/// Maps a credential operation to whether it requires write (PUT) access.
+/// Pure mapping, no AWS calls — kept separate so it's cheaply unit-testable.
+#[cfg(feature = "aws")]
+fn is_write_operation(op: &crate::context::CredentialOperation) -> bool {
+    matches!(op, crate::context::CredentialOperation::ReadWrite)
+}
+
+/// Split an `s3://bucket/key...` URL into (bucket, key). Returns `None` if the
+/// URL isn't `s3://`-scheme or has no key component.
+#[cfg(feature = "aws")]
+fn split_s3_url(url: &str) -> Option<(&str, &str)> {
+    let stripped = url.strip_prefix("s3://").or_else(|| url.strip_prefix("s3a://"))?;
+    stripped.split_once('/')
+}
+
+/// Read the presign expiry (seconds) from `UC_PRESIGN_EXPIRY_SECS`, defaulting
+/// to 300 and falling back to the default on any parse failure.
+#[cfg(feature = "aws")]
+fn presign_expiry_secs() -> u64 {
+    std::env::var("UC_PRESIGN_EXPIRY_SECS")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .unwrap_or(300)
+}
+
+/// Build an S3 client from the assumed-role credentials and presign a GET/PUT
+/// URL for `ctx`'s first location. Returns `None` (rather than erroring the
+/// whole vend) if the location isn't S3-shaped or presigning fails — the
+/// caller still gets valid `aws_temp_credentials` either way.
+#[cfg(feature = "aws")]
+async fn presign_s3_url(
+    sdk_config: &aws_config::SdkConfig,
+    access_key_id: &str,
+    secret_access_key: &str,
+    session_token: &str,
+    ctx: &CredentialContext,
+) -> Option<String> {
+    let url = ctx.locations.first()?;
+    let (bucket, key) = split_s3_url(url)?;
+
+    let endpoint = std::env::var("UC_S3_PRESIGN_ENDPOINT_URL")
+        .ok()
+        .or_else(|| std::env::var("AWS_ENDPOINT_URL").ok())
+        .filter(|s| !s.is_empty());
+
+    let creds = aws_sdk_s3::config::Credentials::new(
+        access_key_id,
+        secret_access_key,
+        Some(session_token.to_string()),
+        None,
+        "uc-vended",
+    );
+
+    let mut s3_config_builder = aws_sdk_s3::config::Builder::from(sdk_config).credentials_provider(creds);
+    if let Some(ref endpoint_url) = endpoint {
+        s3_config_builder = s3_config_builder.endpoint_url(endpoint_url);
+    }
+    let s3_client = aws_sdk_s3::Client::from_conf(s3_config_builder.build());
+
+    let expiry = std::time::Duration::from_secs(presign_expiry_secs());
+    let presign_config = aws_sdk_s3::presigning::PresigningConfig::expires_in(expiry).ok()?;
+
+    if is_write_operation(&ctx.operation) {
+        let presigned = s3_client
+            .put_object()
+            .bucket(bucket)
+            .key(key)
+            .presigned(presign_config)
+            .await
+            .ok()?;
+        Some(presigned.uri().to_string())
+    } else {
+        let presigned = s3_client
+            .get_object()
+            .bucket(bucket)
+            .key(key)
+            .presigned(presign_config)
+            .await
+            .ok()?;
+        Some(presigned.uri().to_string())
     }
 }
 
@@ -312,6 +416,28 @@ mod tests {
     }
 
     #[test]
+    fn cache_key_differs_by_operation() {
+        // Regression test: the vended STS credentials don't differ by operation,
+        // but the presigned `url` does (PUT vs GET) -- without this, a READ
+        // request for a path previously vended as ReadWrite would incorrectly
+        // be served a cached write-style presigned URL.
+        let ctx1 = CredentialContext {
+            scheme: UriScheme::S3,
+            locations: vec!["s3://b/x".to_string()],
+            operation: CredentialOperation::Read,
+            table_id: None,
+            credential_json: None,
+            role_arn: Some("role-a".to_string()),
+            external_id: None,
+        };
+        let ctx2 = CredentialContext {
+            operation: CredentialOperation::ReadWrite,
+            ..ctx1.clone()
+        };
+        assert_ne!(make_cache_key(&ctx1), make_cache_key(&ctx2));
+    }
+
+    #[test]
     fn cache_key_no_role_uses_empty_string() {
         let ctx = CredentialContext {
             scheme: UriScheme::File,
@@ -418,5 +544,29 @@ mod tests {
             let result = vendor.vend(&ctx).await.unwrap();
             assert!(result.aws_temp_credentials.is_none());
         }
+    }
+
+    // ── is_write_operation / split_s3_url (pure, no AWS calls) ─────────────────
+
+    #[cfg(feature = "aws")]
+    #[test]
+    fn is_write_operation_maps_read_write_correctly() {
+        use crate::context::CredentialOperation;
+        use super::is_write_operation;
+
+        assert!(!is_write_operation(&CredentialOperation::Read));
+        assert!(is_write_operation(&CredentialOperation::ReadWrite));
+    }
+
+    #[cfg(feature = "aws")]
+    #[test]
+    fn split_s3_url_parses_bucket_and_key() {
+        use super::split_s3_url;
+
+        assert_eq!(split_s3_url("s3://my-bucket/path/to/object"), Some(("my-bucket", "path/to/object")));
+        assert_eq!(split_s3_url("s3a://my-bucket/key"), Some(("my-bucket", "key")));
+        assert_eq!(split_s3_url("s3://bucket-only"), None);
+        assert_eq!(split_s3_url("file:///tmp/x"), None);
+        assert_eq!(split_s3_url("https://example.com/x"), None);
     }
 }

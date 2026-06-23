@@ -44,7 +44,7 @@ pub async fn create(State(state): State<AppState>, Extension(claims): Extension<
         }
     }
     if state.auth_enabled {
-        if let Some(user) = uc_db::repos::UserRepo::get_by_email(&state.pool, &claims.sub).await? {
+        if let Ok(user) = get_user(&state, &claims.sub).await {
             state.authorizer.grant(user.id, id, Privilege::Owner).await?;
             state.authorizer.add_hierarchy_child(schema.id, id).await?;
         }
@@ -59,7 +59,7 @@ pub async fn list(State(state): State<AppState>, Extension(claims): Extension<Ar
     let (rows, next_token) = FunctionRepo::list(&state.pool, schema.id, params.page_token.as_deref(), max).await?;
     // #1105: filter to only functions the caller can see when auth is enabled
     let principal = if state.auth_enabled {
-        uc_db::repos::UserRepo::get_by_email(&state.pool, &claims.sub).await?.map(|u| u.id)
+        get_user(&state, &claims.sub).await.ok().map(|u| u.id)
     } else { None };
     let visible_ids: std::collections::HashSet<uuid::Uuid> = if state.auth_enabled {
         crate::catalog_api::helpers::filter_visible(&state, principal,

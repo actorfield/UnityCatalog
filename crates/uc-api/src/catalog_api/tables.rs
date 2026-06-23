@@ -4,7 +4,7 @@ use uc_auth::UcClaims;
 use uc_db::{
     managed_storage,
     models::table::{ColumnRow, TableRow},
-    repos::{PropertyRepo, SchemaRepo, StagingTableRepo, TableRepo, UserRepo},
+    repos::{PropertyRepo, SchemaRepo, StagingTableRepo, TableRepo},
 };
 use uc_errors::{ErrorCode, UcError};
 use uc_openapi::catalog::{ColumnInfo, ColumnTypeName, CreateTable, DataSourceFormat, ListTablesResponse, TableInfo, TableType};
@@ -59,8 +59,7 @@ pub async fn create(
 
                 // Validate caller owns the staging table
                 if state.auth_enabled {
-                    let user = UserRepo::get_by_email(&state.pool, &claims.sub).await?
-                        .ok_or_else(|| UcError::unauthenticated("User not found"))?;
+                    let user = get_user(&state, &claims.sub).await?;
                     if !state.authorizer.authorize_any(
                         user.id, staging.id, &[Privilege::Owner]
                     ).await? {
@@ -125,7 +124,7 @@ pub async fn create(
         PropertyRepo::replace(&state.pool, id, "table", props).await?;
     }
     if state.auth_enabled {
-        if let Some(user) = uc_db::repos::UserRepo::get_by_email(&state.pool, &claims.sub).await? {
+        if let Ok(user) = get_user(&state, &claims.sub).await {
             state.authorizer.grant(user.id, id, Privilege::Owner).await?;
             state.authorizer.add_hierarchy_child(schema.id, id).await?;
         }
@@ -145,7 +144,7 @@ pub async fn list(
     let (rows, next_token) = TableRepo::list(&state.pool, schema.id, params.page_token.as_deref(), max).await?;
     // #1105: filter to only tables the caller can see when auth is enabled
     let principal = if state.auth_enabled {
-        uc_db::repos::UserRepo::get_by_email(&state.pool, &claims.sub).await?.map(|u| u.id)
+        get_user(&state, &claims.sub).await.ok().map(|u| u.id)
     } else { None };
     let visible_ids: std::collections::HashSet<uuid::Uuid> = if state.auth_enabled {
         crate::catalog_api::helpers::filter_visible(&state, principal,

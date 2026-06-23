@@ -47,7 +47,7 @@ pub async fn create(
 
     // Grant owner on the staging table for auth validation during commit
     if state.auth_enabled {
-        if let Some(user) = uc_db::repos::UserRepo::get_by_email(&state.pool, &claims.sub).await? {
+        if let Ok(user) = get_user(&state, &claims.sub).await {
             state.authorizer.grant(user.id, id, Privilege::Owner).await?;
         }
     }

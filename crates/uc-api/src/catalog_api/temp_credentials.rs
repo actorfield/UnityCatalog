@@ -2,14 +2,14 @@ use axum::{extract::State, Extension, Json};
 use std::sync::Arc;
 use uc_auth::UcClaims;
 use uc_credentials::context::{CredentialContext, CredentialOperation};
-use uc_db::repos::{CredentialRepo, ExternalLocationRepo, TableRepo, UserRepo, VolumeRepo};
+use uc_db::repos::{CredentialRepo, ExternalLocationRepo, TableRepo, VolumeRepo};
 use uc_errors::{ErrorCode, UcError};
 use uc_openapi::catalog::{
     GenerateTemporaryModelVersionCredential, GenerateTemporaryPathCredential,
     GenerateTemporaryTableCredential, GenerateTemporaryVolumeCredential, TemporaryCredentials,
 };
 use uc_types::{Privilege, UriScheme};
-use crate::state::AppState;
+use crate::{catalog_api::helpers::get_user, state::AppState};
 
 pub async fn table_credentials(
     State(state): State<AppState>,
@@ -19,8 +19,7 @@ pub async fn table_credentials(
     let table = TableRepo::get_by_id(&state.pool, req.table_id).await?;
 
     if state.auth_enabled {
-        let user = UserRepo::get_by_email(&state.pool, &claims.sub).await?
-            .ok_or_else(|| UcError::unauthenticated("User not found"))?;
+        let user = get_user(&state, &claims.sub).await?;
         let priv_needed = match req.operation {
             uc_openapi::catalog::CredentialOperation::Read => Privilege::Select,
             _ => Privilege::Modify,
@@ -31,7 +30,7 @@ pub async fn table_credentials(
     }
 
     let url = table.url.unwrap_or_default();
-    let ctx = build_ctx(&url, CredentialOperation::ReadWrite, Some(req.table_id), &state).await?;
+    let ctx = build_ctx(&url, to_internal_op(&req.operation), Some(req.table_id), &state).await?;
     Ok(Json(state.credential_vendor.vend(&ctx).await?))
 }
 
@@ -43,8 +42,7 @@ pub async fn volume_credentials(
     let volume = VolumeRepo::get_by_id(&state.pool, req.volume_id).await?;
 
     if state.auth_enabled {
-        let user = UserRepo::get_by_email(&state.pool, &claims.sub).await?
-            .ok_or_else(|| UcError::unauthenticated("User not found"))?;
+        let user = get_user(&state, &claims.sub).await?;
         let priv_needed = match req.operation {
             uc_openapi::catalog::CredentialOperation::ReadVolume => Privilege::ReadVolume,
             _ => Privilege::Owner,
@@ -55,7 +53,7 @@ pub async fn volume_credentials(
     }
 
     let url = volume.storage_location.unwrap_or_default();
-    let ctx = build_ctx(&url, CredentialOperation::ReadWrite, None, &state).await?;
+    let ctx = build_ctx(&url, to_internal_op(&req.operation), None, &state).await?;
     Ok(Json(state.credential_vendor.vend(&ctx).await?))
 }
 
@@ -69,7 +67,7 @@ pub async fn model_version_credentials(
     let model = ModelRepo::get_model_by_schema_and_name(&state.pool, schema.id, &req.model_name).await?;
     let version = ModelRepo::get_version(&state.pool, model.id, req.version as i32).await?;
     let url = version.url.or(model.url).unwrap_or_default();
-    let ctx = build_ctx(&url, CredentialOperation::ReadWrite, None, &state).await?;
+    let ctx = build_ctx(&url, to_internal_op(&req.operation), None, &state).await?;
     Ok(Json(state.credential_vendor.vend(&ctx).await?))
 }
 
@@ -81,8 +79,7 @@ pub async fn path_credentials(
     Json(req): Json<GenerateTemporaryPathCredential>,
 ) -> Result<Json<TemporaryCredentials>, UcError> {
     if state.auth_enabled {
-        let user = UserRepo::get_by_email(&state.pool, &claims.sub).await?
-            .ok_or_else(|| UcError::unauthenticated("User not found"))?;
+        let user = get_user(&state, &claims.sub).await?;
 
         // Find the external location whose URL is a prefix of the requested path
         let ext_loc = ExternalLocationRepo::find_by_path_prefix(&state.pool, &req.url).await?
@@ -103,8 +100,21 @@ pub async fn path_credentials(
         }
     }
 
-    let ctx = build_ctx(&req.url, CredentialOperation::ReadWrite, None, &state).await?;
+    let ctx = build_ctx(&req.url, to_internal_op(&req.operation), None, &state).await?;
     Ok(Json(state.credential_vendor.vend(&ctx).await?))
+}
+
+/// Maps the public, per-resource-type openapi operation enum (which distinguishes
+/// table/volume/model-version read vs write) down to the vendor's internal
+/// Read/ReadWrite operation, so presigned URLs (and any other operation-sensitive
+/// vending logic) actually reflect what the caller asked for instead of always
+/// being treated as ReadWrite.
+fn to_internal_op(op: &uc_openapi::catalog::CredentialOperation) -> CredentialOperation {
+    use uc_openapi::catalog::CredentialOperation as Op;
+    match op {
+        Op::Read | Op::ReadVolume | Op::ReadModelVersion => CredentialOperation::Read,
+        Op::ReadWrite | Op::WriteVolume | Op::ReadWriteModelVersion => CredentialOperation::ReadWrite,
+    }
 }
 
 /// Build a CredentialContext, enriching it with the credential payload from the

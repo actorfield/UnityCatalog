@@ -28,8 +28,13 @@ pub async fn token_exchange(
     let sub = if !state.auth_enabled {
         subject_token.to_string()
     } else {
-        // Auth enabled: look up the user in the DB
-        let user = UserRepo::get_by_email(&state.pool, subject_token).await?
+        // Auth enabled: look up the user in the DB (email, then external_id for
+        // OIDC-mapped principals, which have no email)
+        let found = match UserRepo::get_by_email(&state.pool, subject_token).await? {
+            Some(u) => Some(u),
+            None => UserRepo::get_by_external_id(&state.pool, subject_token).await?,
+        };
+        let user = found
             .ok_or_else(|| UcError::unauthenticated(format!("User '{}' not found", subject_token)))?;
         if !user.is_enabled() {
             return Err(UcError::unauthenticated("User account is disabled"));

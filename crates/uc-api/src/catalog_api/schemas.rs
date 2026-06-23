@@ -1,7 +1,7 @@
 use axum::{extract::{Path, Query, State}, http::StatusCode, Extension, Json};
 use std::sync::Arc;
 use uc_auth::UcClaims;
-use uc_db::repos::{CatalogRepo, PropertyRepo, SchemaRepo, UserRepo};
+use uc_db::repos::{CatalogRepo, PropertyRepo, SchemaRepo};
 use uc_errors::UcError;
 use uc_openapi::catalog::{CreateSchema, ListSchemasResponse, SchemaInfo, UpdateSchema};
 use uc_types::Privilege;
@@ -35,7 +35,7 @@ pub async fn create(
         PropertyRepo::replace(&state.pool, id, "schema", props).await?;
     }
     if state.auth_enabled {
-        if let Some(user) = UserRepo::get_by_email(&state.pool, &claims.sub).await? {
+        if let Ok(user) = get_user(&state, &claims.sub).await {
             state.authorizer.grant(user.id, id, Privilege::Owner).await?;
             state.authorizer.add_hierarchy_child(catalog.id, id).await?;
         }
@@ -54,7 +54,7 @@ pub async fn list(
     let (rows, next_token) = SchemaRepo::list(&state.pool, catalog.id, params.page_token.as_deref(), max).await?;
     // #1105: filter to only schemas the caller can see
     let principal = if state.auth_enabled {
-        uc_db::repos::UserRepo::get_by_email(&state.pool, &claims.sub).await?.map(|u| u.id)
+        get_user(&state, &claims.sub).await.ok().map(|u| u.id)
     } else { None };
     let visible_ids: std::collections::HashSet<uuid::Uuid> = if state.auth_enabled {
         filter_visible(&state, principal, rows.iter().map(|r| (r.id, ())).collect(),

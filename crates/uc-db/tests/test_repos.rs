@@ -264,6 +264,43 @@ async fn user_get_by_email_unknown_returns_none() {
     assert!(result.is_none());
 }
 
+#[tokio::test]
+async fn user_get_by_external_id_unknown_returns_none() {
+    let pool = setup_pool().await;
+    let result = UserRepo::get_by_external_id(&pool, "system:serviceaccount:example:sa-nobody").await.unwrap();
+    assert!(result.is_none());
+}
+
+#[tokio::test]
+async fn user_find_or_create_by_external_id_creates_then_reuses_same_row() {
+    let pool = setup_pool().await;
+    let sub = "system:serviceaccount:example:sa-project-abc123";
+
+    let first = UserRepo::find_or_create_by_external_id(&pool, sub).await.unwrap();
+    assert_eq!(first.external_id.as_deref(), Some(sub));
+    assert!(first.email.is_none());
+    assert!(first.is_enabled());
+
+    let second = UserRepo::find_or_create_by_external_id(&pool, sub).await.unwrap();
+    assert_eq!(second.id, first.id, "second call must reuse the row created by the first, not create a duplicate");
+
+    let (users, _) = UserRepo::list(&pool, None, 1000).await.unwrap();
+    let matching = users.iter().filter(|u| u.external_id.as_deref() == Some(sub)).count();
+    assert_eq!(matching, 1, "exactly one row should exist for this external_id");
+}
+
+#[tokio::test]
+async fn user_find_or_create_by_external_id_distinct_subs_get_distinct_principals() {
+    let pool = setup_pool().await;
+    let sub_a = "system:serviceaccount:example:sa-project-aaa";
+    let sub_b = "system:serviceaccount:example:sa-project-bbb";
+
+    let user_a = UserRepo::find_or_create_by_external_id(&pool, sub_a).await.unwrap();
+    let user_b = UserRepo::find_or_create_by_external_id(&pool, sub_b).await.unwrap();
+
+    assert_ne!(user_a.id, user_b.id, "distinct OIDC subjects must resolve to distinct principal UUIDs -- this is the direct regression test for the admin-collapse bug");
+}
+
 // ── CredentialRepo ────────────────────────────────────────────────────────────
 
 #[tokio::test]

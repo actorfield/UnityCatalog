@@ -18,8 +18,14 @@ pub fn split3(s: &str) -> Result<(&str, &str, &str), UcError> {
     Ok((v[0], v[1], v[2]))
 }
 
-pub async fn get_user(state: &AppState, email: &str) -> Result<uc_db::models::user::UserRow, UcError> {
-    UserRepo::get_by_email(&state.pool, email).await?
+/// Resolve a caller's `sub` claim to a `uc_users` row. Tries `email` first
+/// (covers UC-issued password/admin tokens), then falls back to `external_id`
+/// (covers OIDC-mapped synthetic principals, which have no email).
+pub async fn get_user(state: &AppState, sub: &str) -> Result<uc_db::models::user::UserRow, UcError> {
+    if let Some(row) = UserRepo::get_by_email(&state.pool, sub).await? {
+        return Ok(row);
+    }
+    UserRepo::get_by_external_id(&state.pool, sub).await?
         .ok_or_else(|| UcError::unauthenticated("User not found"))
 }
 

@@ -57,6 +57,27 @@ impl UserRepo {
             .map_err(crate::sqlx_err)
     }
 
+    pub async fn get_by_external_id(pool: &AnyPool, external_id: &str) -> Result<Option<UserRow>, UcError> {
+        sqlx::query_as::<_, UserRow>("SELECT * FROM uc_users WHERE external_id = $1")
+            .bind(external_id)
+            .fetch_optional(pool)
+            .await
+            .map_err(crate::sqlx_err)
+    }
+
+    /// Looks up a user by `external_id` (e.g. an OIDC `sub` claim), creating a
+    /// synthetic, zero-grant principal on first sight. Each distinct external
+    /// identity (e.g. each K8s ServiceAccount) gets its own row instead of being
+    /// collapsed into a shared admin principal.
+    pub async fn find_or_create_by_external_id(pool: &AnyPool, external_id: &str) -> Result<UserRow, UcError> {
+        if let Some(row) = Self::get_by_external_id(pool, external_id).await? {
+            return Ok(row);
+        }
+        let id = Uuid::now_v7();
+        let now = chrono::Utc::now().timestamp_millis();
+        Self::create(pool, id, external_id, None, Some(external_id), "ENABLED", now).await
+    }
+
     pub async fn list(
         pool: &AnyPool,
         page_token: Option<&str>,

@@ -36,8 +36,9 @@ rand = "0.8"
 rsa = { version = "0.9", features = ["sha2", "pkcs5"] }
 
 # Cloud SDK deps (feature-gated in uc-credentials)
-aws-config = { version = "1", default-features = false, features = ["rustls"] }
-aws-sdk-sts = { version = "1", default-features = false, features = ["rustls"] }
+aws-config = { version = "1", default-features = false, features = ["rustls", "rt-tokio"] }
+aws-sdk-sts = { version = "1", default-features = false, features = ["rustls", "rt-tokio"] }
+aws-sdk-s3 = { version = "1", default-features = false, features = ["rustls", "rt-tokio"] }
 
 [profile.release]
 lto = true
