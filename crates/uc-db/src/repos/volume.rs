@@ -15,7 +15,12 @@ impl VolumeRepo {
         .bind(row.id).bind(row.schema_id).bind(&row.name).bind(&row.comment)
         .bind(&row.storage_location).bind(&row.owner).bind(row.created_at)
         .bind(&row.created_by).bind(&row.volume_type)
-        .fetch_one(pool).await.map_err(crate::sqlx_err)
+        .fetch_one(pool).await.map_err(|e| match e {
+            sqlx::Error::Database(ref db) if db.is_unique_violation() => {
+                UcError::new(ErrorCode::ResourceAlreadyExists, format!("Volume '{}' already exists", row.name))
+            }
+            other => crate::sqlx_err(other),
+        })
     }
 
     pub async fn get_by_id(pool: &AnyPool, id: Uuid) -> Result<VolumeRow, UcError> {
