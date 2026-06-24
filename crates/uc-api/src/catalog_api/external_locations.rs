@@ -29,6 +29,11 @@ pub async fn create(State(state): State<AppState>, Extension(claims): Extension<
         created_at: Some(now_ms()), created_by: auth_sub(&state, &claims).map(String::from),
         updated_at: None, updated_by: None };
     let created = ExternalLocationRepo::create(&state.pool, &row).await?;
+    if state.auth_enabled {
+        if let Ok(user) = get_user(&state, &claims.sub).await {
+            state.authorizer.grant(user.id, id, Privilege::Owner).await?;
+        }
+    }
     Ok(Json(to_ext_loc_info(created, &req.credential_name)))
 }
 
