@@ -245,7 +245,13 @@ async fn presign_s3_url(
 
     let mut s3_config_builder = aws_sdk_s3::config::Builder::from(sdk_config).credentials_provider(creds);
     if let Some(ref endpoint_url) = endpoint {
-        s3_config_builder = s3_config_builder.endpoint_url(endpoint_url);
+        // A custom endpoint means we're talking to a non-AWS S3-compatible
+        // store (MinIO, etc.), not real AWS S3. Those don't support
+        // virtual-hosted-style (bucket-as-subdomain) addressing -- the SDK's
+        // default -- so the presigned URL's host would be an unresolvable
+        // "<bucket>.<endpoint>" name. Force path-style ("<endpoint>/<bucket>/...")
+        // instead. Real AWS S3 (no endpoint override) keeps the SDK default.
+        s3_config_builder = s3_config_builder.endpoint_url(endpoint_url).force_path_style(true);
     }
     let s3_client = aws_sdk_s3::Client::from_conf(s3_config_builder.build());
 
