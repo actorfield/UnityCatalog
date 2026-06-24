@@ -3,10 +3,6 @@ name = "uc-credentials"
 version = "0.1.0"
 edition = "2021"
 
-[features]
-default = []
-aws = ["dep:aws-config", "dep:aws-sdk-sts", "dep:aws-sdk-s3"]
-
 [dependencies]
 uc-errors = { path = "../uc-errors" }
 uc-types = { path = "../uc-types" }
@@ -19,6 +15,6 @@ thiserror = { workspace = true }
 chrono = { workspace = true }
 uuid = { workspace = true }
 
-aws-config = { workspace = true, optional = true }
-aws-sdk-sts = { workspace = true, optional = true }
-aws-sdk-s3 = { workspace = true, optional = true }
+aws-config = { workspace = true }
+aws-sdk-sts = { workspace = true }
+aws-sdk-s3 = { workspace = true }

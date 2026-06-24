@@ -22,7 +22,6 @@ struct CachedCredential {
 pub struct CloudCredentialVendor {
     /// Cache key: role_arn + sorted locations joined
     cache: Mutex<HashMap<String, CachedCredential>>,
-    #[cfg(feature = "aws")]
     aws: Option<AwsCredentialVendor>,
 }
 
@@ -30,7 +29,6 @@ impl Default for CloudCredentialVendor {
     fn default() -> Self {
         Self {
             cache: Mutex::new(HashMap::new()),
-            #[cfg(feature = "aws")]
             aws: None,
         }
     }
@@ -42,13 +40,12 @@ impl CloudCredentialVendor {
     }
 
     /// Vendor that vends real AWS STS-assumed credentials for S3-scheme
-    /// locations (requires the `aws` feature). UC-server's own AWS
-    /// identity must be able to assume each StorageCredential's role_arn.
-    #[cfg(feature = "aws")]
+    /// locations. UC-server's own AWS identity must be able to assume each
+    /// StorageCredential's role_arn.
     pub fn with_aws() -> Self {
         Self {
             cache: Mutex::new(HashMap::new()),
-            aws: Some(AwsCredentialVendor::new(None)),
+            aws: Some(AwsCredentialVendor::new()),
         }
     }
 
@@ -89,7 +86,6 @@ impl CloudCredentialVendor {
     async fn vend_fresh(&self, ctx: &CredentialContext) -> Result<TemporaryCredentials, UcError> {
         match ctx.scheme {
             UriScheme::S3 => {
-                #[cfg(feature = "aws")]
                 if let Some(ref aws) = self.aws {
                     return aws.vend(ctx).await;
                 }
@@ -137,15 +133,11 @@ fn parse_expiry_ttl(creds: &TemporaryCredentials) -> Option<Duration> {
 
 // ── AWS Credential Vendor ─────────────────────────────────────────────────────
 
-#[cfg(feature = "aws")]
-pub struct AwsCredentialVendor {
-    master_role_arn: Option<String>,
-}
+pub struct AwsCredentialVendor;
 
-#[cfg(feature = "aws")]
 impl AwsCredentialVendor {
-    pub fn new(master_role_arn: Option<String>) -> Self {
-        Self { master_role_arn }
+    pub fn new() -> Self {
+        Self
     }
 
     pub async fn vend(&self, ctx: &CredentialContext) -> Result<TemporaryCredentials, UcError> {
@@ -204,14 +196,12 @@ impl AwsCredentialVendor {
 
 /// Maps a credential operation to whether it requires write (PUT) access.
 /// Pure mapping, no AWS calls — kept separate so it's cheaply unit-testable.
-#[cfg(feature = "aws")]
 fn is_write_operation(op: &crate::context::CredentialOperation) -> bool {
     matches!(op, crate::context::CredentialOperation::ReadWrite)
 }
 
 /// Split an `s3://bucket/key...` URL into (bucket, key). Returns `None` if the
 /// URL isn't `s3://`-scheme or has no key component.
-#[cfg(feature = "aws")]
 fn split_s3_url(url: &str) -> Option<(&str, &str)> {
     let stripped = url.strip_prefix("s3://").or_else(|| url.strip_prefix("s3a://"))?;
     stripped.split_once('/')
@@ -219,7 +209,6 @@ fn split_s3_url(url: &str) -> Option<(&str, &str)> {
 
 /// Read the presign expiry (seconds) from `UC_PRESIGN_EXPIRY_SECS`, defaulting
 /// to 300 and falling back to the default on any parse failure.
-#[cfg(feature = "aws")]
 fn presign_expiry_secs() -> u64 {
     std::env::var("UC_PRESIGN_EXPIRY_SECS")
         .ok()
@@ -231,7 +220,6 @@ fn presign_expiry_secs() -> u64 {
 /// URL for `ctx`'s first location. Returns `None` (rather than erroring the
 /// whole vend) if the location isn't S3-shaped or presigning fails — the
 /// caller still gets valid `aws_temp_credentials` either way.
-#[cfg(feature = "aws")]
 async fn presign_s3_url(
     sdk_config: &aws_config::SdkConfig,
     access_key_id: &str,
@@ -343,11 +331,11 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn s3_without_aws_feature_returns_unimplemented() {
+    async fn s3_without_with_aws_returns_unimplemented() {
         let vendor = CloudCredentialVendor::new();
         let ctx = local_ctx("s3://my-bucket/path");
         let result = vendor.vend(&ctx).await;
-        // Without the aws feature, should be Unimplemented
+        // new() (not with_aws()) has no AWS vendor configured -> Unimplemented
         assert!(result.is_err());
         let msg = result.unwrap_err().to_string();
         assert!(msg.contains("UNIMPLEMENTED") || msg.contains("not configured") || msg.contains("not yet"));
@@ -457,7 +445,6 @@ mod tests {
     #[test]
     fn parse_expiry_ttl_future_returns_some() {
         use uc_openapi::catalog::{TemporaryCredentials, AwsCredentials};
-        use std::time::Duration;
 
         let future = chrono::Utc::now() + chrono::Duration::minutes(60);
         let creds = TemporaryCredentials {
@@ -548,7 +535,6 @@ mod tests {
 
     // ── is_write_operation / split_s3_url (pure, no AWS calls) ─────────────────
 
-    #[cfg(feature = "aws")]
     #[test]
     fn is_write_operation_maps_read_write_correctly() {
         use crate::context::CredentialOperation;
@@ -558,7 +544,6 @@ mod tests {
         assert!(is_write_operation(&CredentialOperation::ReadWrite));
     }
 
-    #[cfg(feature = "aws")]
     #[test]
     fn split_s3_url_parses_bucket_and_key() {
         use super::split_s3_url;

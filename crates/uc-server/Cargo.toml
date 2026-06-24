@@ -11,7 +11,6 @@ path = "src/main.rs"
 default = ["sqlite"]
 sqlite = ["uc-api/sqlite", "uc-db/sqlite", "uc-auth/sqlite"]
 postgres = ["uc-api/postgres", "uc-db/postgres", "uc-auth/postgres"]
-aws = ["uc-credentials/aws"]
 
 [dependencies]
 uc-errors = { path = "../uc-errors" }

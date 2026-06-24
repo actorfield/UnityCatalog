@@ -40,10 +40,12 @@ struct Args {
 
     /// Vend real AWS STS-assumed credentials for S3-scheme storage
     /// credentials (temporary-table/path-credentials APIs), instead of
-    /// returning Unimplemented for the S3 scheme. Requires this binary to
-    /// be built with `--features aws` and UC-server's own AWS identity to
-    /// have sts:AssumeRole permission on each StorageCredential's role_arn.
-    #[arg(long, default_value_t = false)]
+    /// returning Unimplemented for the S3 scheme. Requires UC-server's own
+    /// AWS identity to have sts:AssumeRole permission on each
+    /// StorageCredential's role_arn. On by default -- every deployment in
+    /// this project uses MinIO/S3-compatible storage, so this is the normal
+    /// path, not an opt-in; pass --enable-aws-credentials=false to disable.
+    #[arg(long, default_value_t = true)]
     enable_aws_credentials: bool,
 
     /// Deterministic OIDC `sub` of a "bootstrap operator" principal to grant
@@ -69,23 +71,12 @@ struct Args {
     log_level: String,
 }
 
-#[cfg(feature = "aws")]
 fn build_credential_vendor(enable_aws: bool) -> CloudCredentialVendor {
     if enable_aws {
         CloudCredentialVendor::with_aws()
     } else {
         CloudCredentialVendor::new()
     }
-}
-
-#[cfg(not(feature = "aws"))]
-fn build_credential_vendor(enable_aws: bool) -> CloudCredentialVendor {
-    if enable_aws {
-        tracing::warn!(
-            "--enable-aws-credentials set but uc-server was not built with --features aws; ignoring"
-        );
-    }
-    CloudCredentialVendor::new()
 }
 
 /// Tier 2 auto-provisioning: grant each deterministic-`sub` operator
