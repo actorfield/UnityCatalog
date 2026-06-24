@@ -1,7 +1,7 @@
 use axum::{extract::{Path, Query, State}, http::StatusCode, Extension, Json};
 use std::sync::Arc;
 use uc_auth::UcClaims;
-use uc_db::{models::function::{FunctionParamRow, FunctionRow}, repos::{FunctionRepo, SchemaRepo}};
+use uc_db::{models::function::{FunctionParamRow, FunctionRow}, repos::{FunctionRepo, PropertyRepo, SchemaRepo}};
 use uc_errors::UcError;
 use uc_openapi::catalog::{ColumnTypeName, CreateFunctionRequest, FunctionInfo, FunctionParameterInfo, FunctionParameterInfos, ListFunctionsResponse};
 use uc_types::Privilege;
@@ -43,6 +43,9 @@ pub async fn create(State(state): State<AppState>, Extension(claims): Extension<
             FunctionRepo::insert_params(&state.pool, &rows).await?;
         }
     }
+    if let Some(ref props) = fi.properties {
+        PropertyRepo::replace(&state.pool, id, "function", props).await?;
+    }
     if state.auth_enabled {
         if let Ok(user) = get_user(&state, &claims.sub).await {
             state.authorizer.grant(user.id, id, Privilege::Owner).await?;
@@ -50,7 +53,8 @@ pub async fn create(State(state): State<AppState>, Extension(claims): Extension<
         }
     }
     let (input, _ret) = FunctionRepo::get_params(&state.pool, id).await?;
-    Ok(Json(to_function_info(created, &fi.catalog_name, &fi.schema_name, input)))
+    let props = PropertyRepo::get_for_entity(&state.pool, id, "function").await.ok();
+    Ok(Json(to_function_info(created, &fi.catalog_name, &fi.schema_name, input, props)))
 }
 
 pub async fn list(State(state): State<AppState>, Extension(claims): Extension<Arc<UcClaims>>, Query(params): Query<ListParams>) -> Result<Json<ListFunctionsResponse>, UcError> {
@@ -68,7 +72,7 @@ pub async fn list(State(state): State<AppState>, Extension(claims): Extension<Ar
     } else {
         rows.iter().map(|r| r.id).collect()
     };
-    let functions = rows.into_iter().filter(|r| visible_ids.contains(&r.id)).map(|r| to_function_info(r, &params.catalog_name, &params.schema_name, vec![])).collect();
+    let functions = rows.into_iter().filter(|r| visible_ids.contains(&r.id)).map(|r| to_function_info(r, &params.catalog_name, &params.schema_name, vec![], None)).collect();
     Ok(Json(ListFunctionsResponse { functions, next_page_token: next_token }))
 }
 
@@ -77,7 +81,8 @@ pub async fn get(State(state): State<AppState>, Path(full_name): Path<String>) -
     let schema = SchemaRepo::get_by_full_name(&state.pool, cat, sch).await?;
     let row = FunctionRepo::get_by_schema_and_name(&state.pool, schema.id, func).await?;
     let (input, _ret) = FunctionRepo::get_params(&state.pool, row.id).await?;
-    Ok(Json(to_function_info(row, cat, sch, input)))
+    let props = PropertyRepo::get_for_entity(&state.pool, row.id, "function").await.ok();
+    Ok(Json(to_function_info(row, cat, sch, input, props)))
 }
 
 pub async fn delete(State(state): State<AppState>, Extension(claims): Extension<Arc<UcClaims>>, Path(full_name): Path<String>) -> Result<StatusCode, UcError> {
@@ -88,6 +93,7 @@ pub async fn delete(State(state): State<AppState>, Extension(claims): Extension<
         let user = get_user(&state, &claims.sub).await?;
         require_any(&state, user.id, existing.id, &[Privilege::Owner]).await?;
     }
+    PropertyRepo::delete_for_entity(&state.pool, existing.id, "function").await?;
     FunctionRepo::delete(&state.pool, existing.id).await?;
     Ok(StatusCode::OK)
 }
@@ -107,7 +113,7 @@ fn parse_col_type_name(s: &str) -> Option<ColumnTypeName> {
     }
 }
 
-fn to_function_info(r: FunctionRow, cat: &str, sch: &str, input: Vec<FunctionParamRow>) -> FunctionInfo {
+fn to_function_info(r: FunctionRow, cat: &str, sch: &str, input: Vec<FunctionParamRow>, props: Option<std::collections::HashMap<String, String>>) -> FunctionInfo {
     let params: Vec<FunctionParameterInfo> = input.into_iter().map(|p| {
         let type_name = p.type_name.as_deref().and_then(parse_col_type_name);
         FunctionParameterInfo {
@@ -124,7 +130,7 @@ fn to_function_info(r: FunctionRow, cat: &str, sch: &str, input: Vec<FunctionPar
         routine_definition: r.routine_definition, parameter_style: r.parameter_style,
         is_deterministic: r.is_deterministic, sql_data_access: r.sql_data_access,
         is_null_call: r.is_null_call, security_type: r.security_type, specific_name: r.specific_name,
-        comment: r.comment, properties: None,
+        comment: r.comment, properties: props,
         full_name: Some(format!("{}.{}.{}", cat, sch, r.name)),
         owner: r.owner, created_at: r.created_at, created_by: r.created_by,
         updated_at: r.updated_at, updated_by: r.updated_by, function_id: Some(r.id),

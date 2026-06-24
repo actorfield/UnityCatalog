@@ -1,7 +1,7 @@
 use axum::{extract::{Path, Query, State}, http::StatusCode, Extension, Json};
 use std::sync::Arc;
 use uc_auth::UcClaims;
-use uc_db::{managed_storage, models::model::{ModelVersionRow, RegisteredModelRow}, repos::{ModelRepo, SchemaRepo}};
+use uc_db::{managed_storage, models::model::{ModelVersionRow, RegisteredModelRow}, repos::{ModelRepo, PropertyRepo, SchemaRepo}};
 use uc_errors::UcError;
 use uc_openapi::catalog::{CreateModelVersion, CreateRegisteredModel, FinalizeModelVersion, ListModelVersionsResponse, ListRegisteredModelsResponse, ModelVersionInfo, ModelVersionStatus, RegisteredModelInfo, UpdateModelVersion, UpdateRegisteredModel};
 use uc_types::Privilege;
@@ -32,13 +32,17 @@ pub async fn create_model(State(state): State<AppState>, Extension(claims): Exte
         updated_at: None, updated_by: None, comment: req.comment.clone(), url: model_storage,
         max_version_number: Some(0) };
     let created = ModelRepo::create_model(&state.pool, &row).await?;
+    if let Some(ref props) = req.properties {
+        PropertyRepo::replace(&state.pool, id, "registered_model", props).await?;
+    }
     if state.auth_enabled {
         if let Ok(user) = get_user(&state, &claims.sub).await {
             state.authorizer.grant(user.id, id, Privilege::Owner).await?;
             state.authorizer.add_hierarchy_child(schema.id, id).await?;
         }
     }
-    Ok(Json(to_model_info(created, &req.catalog_name, &req.schema_name)))
+    let props = PropertyRepo::get_for_entity(&state.pool, id, "registered_model").await.ok();
+    Ok(Json(to_model_info(created, &req.catalog_name, &req.schema_name, props)))
 }
 
 pub async fn list_models(State(state): State<AppState>, Extension(claims): Extension<Arc<UcClaims>>, Query(params): Query<ListModelsParams>) -> Result<Json<ListRegisteredModelsResponse>, UcError> {
@@ -58,7 +62,7 @@ pub async fn list_models(State(state): State<AppState>, Extension(claims): Exten
     } else {
         rows.iter().map(|r| r.id).collect()
     };
-    let registered_models = rows.into_iter().filter(|r| visible_ids.contains(&r.id)).map(|r| to_model_info(r, cat, sch)).collect();
+    let registered_models = rows.into_iter().filter(|r| visible_ids.contains(&r.id)).map(|r| to_model_info(r, cat, sch, None)).collect();
     Ok(Json(ListRegisteredModelsResponse { registered_models, next_page_token: next_token }))
 }
 
@@ -66,7 +70,8 @@ pub async fn get_model(State(state): State<AppState>, Path(full_name): Path<Stri
     let (cat, sch, mdl) = split3(&full_name)?;
     let schema = SchemaRepo::get_by_full_name(&state.pool, cat, sch).await?;
     let row = ModelRepo::get_model_by_schema_and_name(&state.pool, schema.id, mdl).await?;
-    Ok(Json(to_model_info(row, cat, sch)))
+    let props = PropertyRepo::get_for_entity(&state.pool, row.id, "registered_model").await.ok();
+    Ok(Json(to_model_info(row, cat, sch, props)))
 }
 
 pub async fn update_model(State(state): State<AppState>, Extension(claims): Extension<Arc<UcClaims>>, Path(full_name): Path<String>, Json(req): Json<UpdateRegisteredModel>) -> Result<Json<RegisteredModelInfo>, UcError> {
@@ -90,10 +95,14 @@ pub async fn update_model(State(state): State<AppState>, Extension(claims): Exte
     .bind(existing.id)
     .execute(state.pool.as_ref())
     .await.map_err(crate::db_err)?;
+    if let Some(ref props) = req.properties {
+        PropertyRepo::replace(&state.pool, existing.id, "registered_model", props).await?;
+    }
     let effective_name = req.new_name.as_deref().unwrap_or(mdl);
     let updated = ModelRepo::get_model_by_schema_and_name(&state.pool, schema.id, effective_name).await
         .unwrap_or_else(|_| existing.clone());
-    Ok(Json(to_model_info(updated, cat, sch)))
+    let props = PropertyRepo::get_for_entity(&state.pool, existing.id, "registered_model").await.ok();
+    Ok(Json(to_model_info(updated, cat, sch, props)))
 }
 
 pub async fn delete_model(State(state): State<AppState>, Extension(claims): Extension<Arc<UcClaims>>, Path(full_name): Path<String>) -> Result<StatusCode, UcError> {
@@ -104,6 +113,7 @@ pub async fn delete_model(State(state): State<AppState>, Extension(claims): Exte
         let user = get_user(&state, &claims.sub).await?;
         require_any(&state, user.id, existing.id, &[Privilege::Owner]).await?;
     }
+    PropertyRepo::delete_for_entity(&state.pool, existing.id, "registered_model").await?;
     ModelRepo::delete_model(&state.pool, existing.id).await?;
     Ok(StatusCode::OK)
 }
@@ -204,11 +214,11 @@ pub async fn finalize_version(State(state): State<AppState>, Path((full_name, ve
     Ok(Json(to_version_info(updated, cat, sch, mdl)))
 }
 
-fn to_model_info(r: RegisteredModelRow, cat: &str, sch: &str) -> RegisteredModelInfo {
+fn to_model_info(r: RegisteredModelRow, cat: &str, sch: &str, props: Option<std::collections::HashMap<String, String>>) -> RegisteredModelInfo {
     RegisteredModelInfo { name: r.name.clone(), catalog_name: cat.to_string(), schema_name: sch.to_string(),
         storage_location: r.url, full_name: Some(format!("{}.{}.{}", cat, sch, r.name)), comment: r.comment,
         owner: r.owner, created_at: r.created_at, created_by: r.created_by, updated_at: r.updated_at,
-        updated_by: r.updated_by, id: Some(r.id) }
+        updated_by: r.updated_by, id: Some(r.id), properties: props }
 }
 
 fn parse_model_status(s: Option<&str>) -> Option<ModelVersionStatus> {

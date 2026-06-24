@@ -339,6 +339,8 @@ pub struct VolumeInfo {
     pub storage_location: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub full_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub properties: Option<HashMap<String, String>>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -351,6 +353,8 @@ pub struct CreateVolumeRequestContent {
     pub comment: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub storage_location: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub properties: Option<HashMap<String, String>>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -361,6 +365,8 @@ pub struct UpdateVolumeRequestContent {
     pub comment: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub owner: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub properties: Option<HashMap<String, String>>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -494,6 +500,8 @@ pub struct RegisteredModelInfo {
     pub updated_by: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub id: Option<Uuid>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub properties: Option<HashMap<String, String>>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -505,6 +513,8 @@ pub struct CreateRegisteredModel {
     pub comment: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub storage_location: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub properties: Option<HashMap<String, String>>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -515,6 +525,8 @@ pub struct UpdateRegisteredModel {
     pub comment: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub owner: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub properties: Option<HashMap<String, String>>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]

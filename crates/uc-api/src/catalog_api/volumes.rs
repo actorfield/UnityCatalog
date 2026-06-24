@@ -1,7 +1,7 @@
 use axum::{extract::{Path, Query, State}, http::StatusCode, Extension, Json};
 use std::sync::Arc;
 use uc_auth::UcClaims;
-use uc_db::{managed_storage, models::volume::VolumeRow, repos::{SchemaRepo, VolumeRepo}};
+use uc_db::{managed_storage, models::volume::VolumeRow, repos::{PropertyRepo, SchemaRepo, VolumeRepo}};
 use uc_errors::UcError;
 use uc_openapi::catalog::{CreateVolumeRequestContent, ListVolumesResponseContent, UpdateVolumeRequestContent, VolumeInfo, VolumeType};
 use uc_types::Privilege;
@@ -34,13 +34,17 @@ pub async fn create(State(state): State<AppState>, Extension(claims): Extension<
         created_by: auth_sub(&state, &claims).map(String::from), updated_at: None, updated_by: None,
         volume_type: format!("{:?}", req.volume_type).to_uppercase() };
     let created = VolumeRepo::create(&state.pool, &row).await?;
+    if let Some(ref props) = req.properties {
+        PropertyRepo::replace(&state.pool, id, "volume", props).await?;
+    }
     if state.auth_enabled {
         if let Ok(user) = get_user(&state, &claims.sub).await {
             state.authorizer.grant(user.id, id, Privilege::Owner).await?;
             state.authorizer.add_hierarchy_child(schema.id, id).await?;
         }
     }
-    Ok(Json(to_volume_info(created, &req.catalog_name, &req.schema_name)))
+    let props = PropertyRepo::get_for_entity(&state.pool, id, "volume").await.ok();
+    Ok(Json(to_volume_info(created, &req.catalog_name, &req.schema_name, props)))
 }
 
 pub async fn list(State(state): State<AppState>, Extension(claims): Extension<Arc<UcClaims>>, Query(params): Query<ListParams>) -> Result<Json<ListVolumesResponseContent>, UcError> {
@@ -58,7 +62,7 @@ pub async fn list(State(state): State<AppState>, Extension(claims): Extension<Ar
     } else {
         rows.iter().map(|r| r.id).collect()
     };
-    let volumes = rows.into_iter().filter(|r| visible_ids.contains(&r.id)).map(|r| to_volume_info(r, &params.catalog_name, &params.schema_name)).collect();
+    let volumes = rows.into_iter().filter(|r| visible_ids.contains(&r.id)).map(|r| to_volume_info(r, &params.catalog_name, &params.schema_name, None)).collect();
     Ok(Json(ListVolumesResponseContent { volumes, next_page_token: next_token }))
 }
 
@@ -66,7 +70,8 @@ pub async fn get(State(state): State<AppState>, Path(full_name): Path<String>) -
     let (cat, sch, vol) = split3(&full_name)?;
     let schema = SchemaRepo::get_by_full_name(&state.pool, cat, sch).await?;
     let row = VolumeRepo::get_by_schema_and_name(&state.pool, schema.id, vol).await?;
-    Ok(Json(to_volume_info(row, cat, sch)))
+    let props = PropertyRepo::get_for_entity(&state.pool, row.id, "volume").await.ok();
+    Ok(Json(to_volume_info(row, cat, sch, props)))
 }
 
 pub async fn update(State(state): State<AppState>, Extension(claims): Extension<Arc<UcClaims>>, Path(full_name): Path<String>, Json(req): Json<UpdateVolumeRequestContent>) -> Result<Json<VolumeInfo>, UcError> {
@@ -78,7 +83,11 @@ pub async fn update(State(state): State<AppState>, Extension(claims): Extension<
         require_any(&state, user.id, existing.id, &[Privilege::Owner]).await?;
     }
     let row = VolumeRepo::update(&state.pool, existing.id, req.new_name.as_deref(), req.comment.as_deref(), req.owner.as_deref(), now_ms(), auth_sub(&state, &claims)).await?;
-    Ok(Json(to_volume_info(row, cat, sch)))
+    if let Some(ref props) = req.properties {
+        PropertyRepo::replace(&state.pool, existing.id, "volume", props).await?;
+    }
+    let props = PropertyRepo::get_for_entity(&state.pool, existing.id, "volume").await.ok();
+    Ok(Json(to_volume_info(row, cat, sch, props)))
 }
 
 pub async fn delete(State(state): State<AppState>, Extension(claims): Extension<Arc<UcClaims>>, Path(full_name): Path<String>) -> Result<StatusCode, UcError> {
@@ -90,6 +99,7 @@ pub async fn delete(State(state): State<AppState>, Extension(claims): Extension<
         require_any(&state, user.id, existing.id, &[Privilege::Owner]).await?;
     }
     state.authorizer.remove_hierarchy_children(existing.id).await?;
+    PropertyRepo::delete_for_entity(&state.pool, existing.id, "volume").await?;
     VolumeRepo::delete(&state.pool, existing.id).await?;
     Ok(StatusCode::OK)
 }
@@ -98,11 +108,11 @@ fn normalize_loc(url: Option<String>) -> Option<String> {
     url.map(|u| if u.starts_with('/') { format!("file://{}", u) } else { u })
 }
 
-fn to_volume_info(r: VolumeRow, cat: &str, sch: &str) -> VolumeInfo {
+fn to_volume_info(r: VolumeRow, cat: &str, sch: &str, props: Option<std::collections::HashMap<String, String>>) -> VolumeInfo {
     let vt = if r.volume_type == "MANAGED" { VolumeType::Managed } else { VolumeType::External };
     VolumeInfo { catalog_name: cat.to_string(), schema_name: sch.to_string(), name: r.name.clone(),
         comment: r.comment, owner: r.owner, created_at: Some(r.created_at), created_by: r.created_by,
         updated_at: r.updated_at, updated_by: r.updated_by, volume_id: Some(r.id), volume_type: vt,
-        storage_location: normalize_loc(r.storage_location),
+        storage_location: normalize_loc(r.storage_location), properties: props,
         full_name: Some(format!("{}.{}.{}", cat, sch, r.name)) }
 }
