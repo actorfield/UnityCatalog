@@ -4,8 +4,8 @@
 Usage:
     UC_HOST=http://localhost:8080 UC_TOKEN=<token> python3 seed.py
 
-UC_TOKEN is the admin token from /etc/uc/conf/token.txt on the conf PVC.
-See manifests/NOTES.md checkpoint 12 for how to retrieve it.
+UC_TOKEN is the admin bearer token. When running with auth enabled, retrieve
+it from the token.txt file written by the server into --config-dir on startup.
 """
 import os, requests, sys, json
 
@@ -18,7 +18,7 @@ CTRL  = f"{BASE}/api/1.0/unity-control"
 STORAGE_ROOT = os.environ.get("UC_STORAGE_ROOT", "s3://uc-storage")
 
 if not TOKEN:
-    print("ERROR: UC_TOKEN env var required. See manifests/NOTES.md checkpoint 12.")
+    print("ERROR: UC_TOKEN env var required (admin bearer token from --config-dir/token.txt).")
     sys.exit(1)
 
 HEADERS = {"Authorization": f"Bearer {TOKEN}", "Content-Type": "application/json"}

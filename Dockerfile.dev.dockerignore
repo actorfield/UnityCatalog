@@ -1,4 +1,2 @@
-*.fossil
-.fslckout
-.fossil-settings/
-.fossil-ignore
+# Only the pre-built binary in target/ is needed for this image
+.git/

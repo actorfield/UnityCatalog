@@ -158,3 +158,9 @@ cargo check          # fast type check
 cargo test --lib     # 16 unit tests (JWT, serde, error mapping)
 cargo build          # full build
 ```
+
+## License
+
+Licensed under the [Apache License, Version 2.0](LICENSE). See [NOTICE](NOTICE) for
+attribution to the upstream [Unity Catalog](https://github.com/unitycatalog/unitycatalog)
+Java project this is ported from.

@@ -50,17 +50,15 @@ struct Args {
 
     /// Deterministic OIDC `sub` of a "bootstrap operator" principal to grant
     /// OWNER on the metastore at startup (mirrors the admin@unitycatalog.io
-    /// bootstrap below, but keyed by external_id instead of email). Intended
-    /// for the per-org uc-server pods: each pod that does its own catalog/
-    /// schema/table/volume bootstrap against this uc-server (the
-    /// system-operator itself, and per-org project-operator's own
-    /// per-project catalog creation in user_session.rs) authenticates with
-    /// a projected K8s SA token carrying a deterministic `sub` of the form
+    /// bootstrap below, but keyed by external_id instead of email). Useful
+    /// when uc-server is deployed alongside automation that bootstraps catalogs
+    /// using K8s SA projected tokens. Each automating service authenticates
+    /// with a projected K8s SA token carrying a deterministic `sub` of the form
     /// `system:serviceaccount:<namespace>:<service-account-name>` — passing
     /// that string here lets those bootstrap calls succeed instead of
     /// failing with 403, since brand-new OIDC principals otherwise get zero
-    /// grants. Repeatable (one per bootstrapping identity) since more than
-    /// one SA needs this per per-org uc-server. Can also be set via the
+    /// grants. Repeatable (comma-separated or multiple flags) to cover more
+    /// than one bootstrapping identity. Can also be set via the
     /// OPERATOR_EXTERNAL_ID env var (comma-separated for multiple values).
     /// Unset by default — zero behavior change for any deployment that
     /// doesn't pass it (local dev, tests, --no-auth setups).
@@ -79,22 +77,19 @@ fn build_credential_vendor(enable_aws: bool) -> CloudCredentialVendor {
     }
 }
 
-/// Tier 2 auto-provisioning: grant each deterministic-`sub` operator
-/// principal OWNER on the metastore at startup, mirroring the
-/// admin@unitycatalog.io bootstrap above but keyed by OIDC `external_id`
-/// rather than email (OIDC principals created via
+/// Grant each deterministic-`sub` operator principal OWNER on the metastore
+/// at startup, mirroring the admin@unitycatalog.io bootstrap above but keyed
+/// by OIDC `external_id` rather than email (OIDC principals created via
 /// `find_or_create_by_external_id` have `email: None` and can never match
 /// the admin-by-email lookup). No-op when `external_ids` is empty (the
 /// default) — existing deployments that don't pass
 /// `--operator-external-id`/`OPERATOR_EXTERNAL_ID` are unaffected.
 ///
 /// Once granted OWNER on the metastore, each principal's own catalog/schema/
-/// table creation calls (e.g. from the operator's `bootstrap_uc`, or
-/// project-operator's own per-project catalog bootstrap) succeed:
-/// `authorize_any(.., [CreateCatalog, Owner])` passes, and each creation
-/// handler explicitly grants the creator OWNER on the newly created object
-/// (see uc-api's catalogs/schemas/tables `create` handlers), so no further
-/// per-object grants are needed here.
+/// table creation calls succeed: `authorize_any(.., [CreateCatalog, Owner])`
+/// passes, and each creation handler explicitly grants the creator OWNER on
+/// the newly created object (see uc-api's catalogs/schemas/tables `create`
+/// handlers), so no further per-object grants are needed here.
 async fn bootstrap_operator_principal(
     pool: &AnyPool,
     authorizer: &dyn uc_auth::Authorizer,

@@ -1,0 +1,9 @@
+target/
+Cargo.lock
+ui/node_modules/
+ui/build/
+tests/python/__pycache__/
+tests/python/*.pyc
+coverage/
+crates/*/coverage/
+*.profraw

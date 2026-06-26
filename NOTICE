@@ -1,0 +1,8 @@
+unitycatalog-rs
+Copyright 2026 Muralidhar Reddy Challa
+
+This product is a Rust port of Unity Catalog
+(https://github.com/unitycatalog/unitycatalog), Copyright (2024) Databricks, Inc.,
+licensed under the Apache License, Version 2.0. No source code was copied from
+the original Java implementation; API surface and behavior were re-implemented
+from its public specification.
