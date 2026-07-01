@@ -8,12 +8,14 @@ ARG TARGETARCH
 RUN apt-get update && apt-get install -y pkg-config python3-pip && rm -rf /var/lib/apt/lists/*
 RUN pip install ziglang --break-system-packages
 RUN cargo install cargo-chef cargo-zigbuild
-# cargo-chef's "cook" step runs a plain `cargo build`, not `cargo zigbuild` --
-# crates with C build scripts (e.g. ring) need a real cross compiler on PATH
-# for that step; zigbuild's own compiler setup only applies to the final
-# build below. CC goes through zig (not musl-tools' host-native musl-gcc) so
-# this is a real cross compiler for either target regardless of the host's
-# own arch, not just "host happens to match target".
+# Both `cargo chef cook` (via --zigbuild below) and the final `cargo
+# zigbuild` use the same build tool -- using plain `cargo build` for cook
+# and zigbuild for the final step gives crates with C build scripts (e.g.
+# ring, aws-lc-sys) a different rustc/linker fingerprint between the two, so
+# Cargo won't recognize cook's compiled dependencies as reusable and
+# silently recompiles the entire tree a second time. CC goes through zig
+# (not musl-tools' host-native musl-gcc) so build.rs scripts still get a
+# real cross compiler regardless of the host's own arch.
 RUN case "$TARGETARCH" in \
       amd64) triple=x86_64-unknown-linux-musl; zigtriple=x86_64-linux-musl ;; \
       arm64) triple=aarch64-unknown-linux-musl; zigtriple=aarch64-linux-musl ;; \
@@ -60,10 +62,22 @@ RUN cargo chef prepare --bin uc-server --recipe-path recipe.json
 
 FROM chef AS builder
 COPY --from=planner /app/recipe.json recipe.json
-RUN cargo chef cook --profile docker --bin uc-server --target "$(cat /rust_target.txt)" --recipe-path recipe.json
+# cargo-registry cache is shared with the aispecs/operator Dockerfiles (same
+# id -- safe, it's just versioned crate source tarballs keyed by name+
+# checksum). The target/ artifact cache uses its own id (cargo-target-uc,
+# not cargo-target-docker) since this is a separate workspace/Cargo.lock --
+# mixing two workspaces' compiled artifacts under one cache id could cause
+# incorrect incremental-compile reuse. The final `cp` has to happen inside
+# this same RUN -- the /app/target mount disappears the moment the command
+# that declared it exits.
+RUN --mount=type=cache,target=/usr/local/cargo/registry,id=cargo-registry \
+    --mount=type=cache,target=/app/target,id=cargo-target-uc \
+    cargo chef cook --zigbuild --profile docker --bin uc-server --target "$(cat /rust_target.txt)" --recipe-path recipe.json
 COPY . .
-RUN cargo zigbuild --profile docker --target "$(cat /rust_target.txt)" -p uc-server
-RUN cp "/app/target/$(cat /rust_target.txt)/docker/uc-server" /uc-server-bin
+RUN --mount=type=cache,target=/usr/local/cargo/registry,id=cargo-registry \
+    --mount=type=cache,target=/app/target,id=cargo-target-uc \
+    cargo zigbuild --profile docker --target "$(cat /rust_target.txt)" -p uc-server && \
+    cp "/app/target/$(cat /rust_target.txt)/docker/uc-server" /uc-server-bin
 
 FROM scratch
 COPY --from=builder /uc-server-bin /uc-server

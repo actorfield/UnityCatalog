@@ -18,7 +18,11 @@ license = "Apache-2.0"
 axum = { version = "0.7", features = ["macros"] }
 tower = { version = "0.4", features = ["util"] }
 tower-http = { version = "0.5", features = ["trace", "cors"] }
-tokio = { version = "1", features = ["full"] }
+# "full" was previously requested but nothing here uses tokio::process/
+# signal (checked via grep) -- uc-server does use tokio::fs (local_path
+# read/write in main.rs), so that stays. hyper/reqwest/axum will still
+# pull whatever tokio features *they* need transitively regardless.
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "fs"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sqlx = { version = "0.7", features = ["runtime-tokio-rustls", "uuid", "chrono"] }
