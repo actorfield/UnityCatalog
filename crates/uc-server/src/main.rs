@@ -138,7 +138,7 @@ async fn main() -> anyhow::Result<()> {
 
     info!("Starting Unity Catalog server on port {}", args.port);
     info!("Config dir: {}", args.config_dir.display());
-    info!("Database:   {}", args.database_url);
+    info!("Database:   {}", mask_db_url(&args.database_url));
     info!(
         "Auth:       {}",
         if args.no_auth { "disabled" } else { "enabled" }
@@ -159,7 +159,7 @@ async fn main() -> anyhow::Result<()> {
         .await
         .context("Failed to prepare database URL")?;
 
-    let pool = AnyPool::connect(&actual_db_url)
+    let pool = uc_db::pool::connect(&actual_db_url)
         .await
         .context("Failed to connect to database")?;
 
@@ -275,7 +275,11 @@ async fn main() -> anyhow::Result<()> {
         .layer(axum::middleware::from_fn_with_state(
             state.clone(),
             auth_middleware,
-        ));
+        ))
+        // Registered after the auth layer so it is *not* wrapped by it: an
+        // unauthenticated liveness/readiness endpoint that validates the HTTP
+        // stack is up (unlike a tcpSocket probe). Returns 200 OK, no auth.
+        .route("/health", axum::routing::get(|| async { "OK" }));
 
     // ── 10. Bind and serve ────────────────────────────────────────────────────
     let addr = SocketAddr::from(([0, 0, 0, 0], args.port));
@@ -400,6 +404,31 @@ async fn download_from_s3(
 
 fn sanitize_filename(key: &str) -> String {
     key.replace('/', "_")
+}
+
+/// Redact the `user:password@` credentials from a database URL before logging.
+/// SQLite URLs have no credentials and pass through unchanged; Postgres/S3
+/// URLs of the form `scheme://user:pass@host/...` have the password masked.
+fn mask_db_url(url: &str) -> String {
+    let Some((scheme, rest)) = url.split_once("://") else {
+        return url.to_string();
+    };
+    // Only the authority (up to the first '/') can carry credentials.
+    let (authority, path) = match rest.split_once('/') {
+        Some((a, p)) => (a, Some(p)),
+        None => (rest, None),
+    };
+    let masked_authority = match authority.split_once('@') {
+        Some((creds, host)) => {
+            let user = creds.split_once(':').map(|(u, _)| u).unwrap_or(creds);
+            format!("{user}:****@{host}")
+        }
+        None => authority.to_string(),
+    };
+    match path {
+        Some(p) => format!("{scheme}://{masked_authority}/{p}"),
+        None => format!("{scheme}://{masked_authority}"),
+    }
 }
 
 fn base64_encode(input: &str) -> String {
