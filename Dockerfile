@@ -1,21 +1,10 @@
 FROM rust:latest AS chef
-# TARGETARCH is auto-populated by buildkit/buildah from the build host's
-# native platform unless --platform is passed explicitly -- so this resolves
-# to amd64 on our Ubuntu dev/CI/prod boxes with zero change to how they
-# invoke `docker build`/`podman build`, and to arm64 on Apple Silicon, and
-# also supports genuine cross-builds via `--platform linux/amd64` etc.
+# TARGETARCH: auto-set by buildkit/buildah from host arch unless --platform is passed.
 ARG TARGETARCH
 RUN apt-get update && apt-get install -y pkg-config python3-pip && rm -rf /var/lib/apt/lists/*
 RUN pip install ziglang --break-system-packages
 RUN cargo install cargo-chef cargo-zigbuild
-# Both `cargo chef cook` (via --zigbuild below) and the final `cargo
-# zigbuild` use the same build tool -- using plain `cargo build` for cook
-# and zigbuild for the final step gives crates with C build scripts (e.g.
-# ring, aws-lc-sys) a different rustc/linker fingerprint between the two, so
-# Cargo won't recognize cook's compiled dependencies as reusable and
-# silently recompiles the entire tree a second time. CC goes through zig
-# (not musl-tools' host-native musl-gcc) so build.rs scripts still get a
-# real cross compiler regardless of the host's own arch.
+# cook must use --zigbuild too, or its fingerprint won't match the final build and everything recompiles twice.
 RUN case "$TARGETARCH" in \
       amd64) triple=x86_64-unknown-linux-musl; zigtriple=x86_64-linux-musl ;; \
       arm64) triple=aarch64-unknown-linux-musl; zigtriple=aarch64-linux-musl ;; \
@@ -24,12 +13,7 @@ RUN case "$TARGETARCH" in \
     echo "$triple" > /rust_target.txt; \
     rustup target add "$triple"; \
     echo "$zigtriple" > /zig_target.txt
-# zig cc is clang-based, so cc-rs (e.g. building aws-lc-sys) detects it as
-# clang and appends its own `--target=<rust-4-part-triple>` after our args --
-# zig's own `-target` flag parser only understands its 3-part format and
-# chokes on the 4-part one ("UnknownOperatingSystem"). Strip any
-# caller-supplied -target/--target before forwarding so ours is the only one
-# zig ever sees.
+# cc-rs detects zig cc as clang and appends its own --target=<rust-triple>, which breaks zig's -target parser; strip it.
 RUN cat > /usr/local/bin/musl-cc <<'WRAP'
 #!/bin/bash
 zt=$(cat /zig_target.txt)
@@ -54,22 +38,11 @@ WORKDIR /app
 
 FROM chef AS planner
 COPY . .
-# --bin scopes the recipe to only what uc-server actually needs. Today
-# uc-server pulls in nearly every workspace member anyway, but this keeps
-# the build correctly scoped as the workspace grows instead of silently
-# building unrelated crates.
 RUN cargo chef prepare --bin uc-server --recipe-path recipe.json
 
 FROM chef AS builder
 COPY --from=planner /app/recipe.json recipe.json
-# cargo-registry cache is shared with the aispecs/operator Dockerfiles (same
-# id -- safe, it's just versioned crate source tarballs keyed by name+
-# checksum). The target/ artifact cache uses its own id (cargo-target-uc,
-# not cargo-target-docker) since this is a separate workspace/Cargo.lock --
-# mixing two workspaces' compiled artifacts under one cache id could cause
-# incorrect incremental-compile reuse. The final `cp` has to happen inside
-# this same RUN -- the /app/target mount disappears the moment the command
-# that declared it exits.
+# Own target/ cache id (separate Cargo.lock from aispecs/operator); registry cache id is shared globally.
 RUN --mount=type=cache,target=/usr/local/cargo/registry,id=cargo-registry \
     --mount=type=cache,target=/app/target,id=cargo-target-uc \
     cargo chef cook --zigbuild --profile docker --bin uc-server --target "$(cat /rust_target.txt)" --recipe-path recipe.json
