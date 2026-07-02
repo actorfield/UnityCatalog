@@ -39,12 +39,13 @@ async fn resolve_resource_id(
     securable_type: &str,
     full_name: &str,
 ) -> Result<Uuid, UcError> {
-    use uc_db::repos::{CatalogRepo, SchemaRepo, TableRepo, VolumeRepo, FunctionRepo, ModelRepo};
+    use uc_db::repos::{CatalogRepo, SchemaRepo, TableRepo, VolumeRepo, FunctionRepo, ModelRepo, ExternalLocationRepo};
     use crate::catalog_api::helpers::{split2, split3};
 
     match securable_type.to_uppercase().as_str() {
         "METASTORE" => Ok(state.metastore_id),
         "CATALOG" => Ok(CatalogRepo::get_by_name(&state.pool, full_name).await?.id),
+        "EXTERNAL_LOCATION" => Ok(ExternalLocationRepo::get_by_name(&state.pool, full_name).await?.id),
         "SCHEMA" => {
             let (cat, sch) = split2(full_name)?;
             Ok(SchemaRepo::get_by_full_name(&state.pool, cat, sch).await?.id)
@@ -122,9 +123,21 @@ pub async fn update(
     }
 
     for change in &req.changes {
-        // Resolve principal email to UUID
-        let user = UserRepo::get_by_email(&state.pool, &change.principal).await?
-            .ok_or_else(|| UcError::not_found("User", &change.principal))?;
+        // Resolve principal to a user UUID. Human principals are addressed by
+        // email; OIDC principals (e.g. k8s service accounts granted via
+        // --operator-external-id) have `email: None` and are keyed by their
+        // external_id sub, so email lookup can never match them (see
+        // find_or_create_by_external_id's doc). Fall back to external_id, and
+        // auto-provision it when absent so grants can target a principal that
+        // hasn't authenticated yet (mirrors get_user's email-then-external_id
+        // resolution).
+        let user = match UserRepo::get_by_email(&state.pool, &change.principal).await? {
+            Some(u) => u,
+            None => match UserRepo::get_by_external_id(&state.pool, &change.principal).await? {
+                Some(u) => u,
+                None => UserRepo::find_or_create_by_external_id(&state.pool, &change.principal).await?,
+            },
+        };
 
         for priv_str in &change.add {
             let p = Privilege::from_casbin_str(priv_str)
