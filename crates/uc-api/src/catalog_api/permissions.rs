@@ -117,7 +117,7 @@ pub async fn update(
 
     if state.auth_enabled {
         let caller = get_user(&state, &claims.sub).await?;
-        if !state.authorizer.authorize_any(caller.id, resource_id, &[Privilege::Owner]).await? {
+        if !state.authorizer.authorize(caller.id, resource_id, Privilege::Owner).await? {
             return Err(UcError::permission_denied("OWNER privilege required to manage permissions"));
         }
     }

@@ -24,7 +24,7 @@ pub async fn create(
     let catalog = CatalogRepo::get_by_name(&state.pool, &req.catalog_name).await?;
     if state.auth_enabled {
         let user = get_user(&state, &claims.sub).await?;
-        require_any(&state, user.id, catalog.id, &[Privilege::Owner, Privilege::CreateSchema]).await?;
+        require(&state, user.id, catalog.id, Privilege::CreateSchema).await?;
     }
     validate_sql_name(&req.name)?;
     let id = Uuid::new_v4();
@@ -58,7 +58,7 @@ pub async fn list(
     } else { None };
     let visible_ids: std::collections::HashSet<uuid::Uuid> = if state.auth_enabled {
         filter_visible(&state, principal, rows.iter().map(|r| (r.id, ())).collect(),
-            &[uc_types::Privilege::Owner, uc_types::Privilege::UseSchema]).await?.into_iter().collect()
+            uc_types::Privilege::UseSchema).await?.into_iter().collect()
     } else {
         rows.iter().map(|r| r.id).collect()
     };
@@ -87,7 +87,7 @@ pub async fn update(
     let existing = SchemaRepo::get_by_full_name(&state.pool, cat, sch).await?;
     if state.auth_enabled {
         let user = get_user(&state, &claims.sub).await?;
-        require_any(&state, user.id, existing.id, &[Privilege::Owner]).await?;
+        require(&state, user.id, existing.id, Privilege::Owner).await?;
     }
     let now = chrono::Utc::now().timestamp_millis();
     let row = SchemaRepo::update(&state.pool, existing.id, req.new_name.as_deref(),
@@ -114,7 +114,7 @@ pub async fn delete(
     let existing = SchemaRepo::get_by_full_name(&state.pool, cat, sch).await?;
     if state.auth_enabled {
         let user = get_user(&state, &claims.sub).await?;
-        require_any(&state, user.id, existing.id, &[Privilege::Owner]).await?;
+        require(&state, user.id, existing.id, Privilege::Owner).await?;
     }
 
     let force = params.force.unwrap_or(false);

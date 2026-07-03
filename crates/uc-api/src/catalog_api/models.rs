@@ -15,7 +15,7 @@ pub async fn create_model(State(state): State<AppState>, Extension(claims): Exte
     let schema = SchemaRepo::get_by_full_name(&state.pool, &req.catalog_name, &req.schema_name).await?;
     if state.auth_enabled {
         let user = get_user(&state, &claims.sub).await?;
-        require_any(&state, user.id, schema.id, &[Privilege::Owner, Privilege::CreateModel]).await?;
+        require(&state, user.id, schema.id, Privilege::CreateModel).await?;
     }
     validate_sql_name(&req.name)?;
     let id = Uuid::new_v4(); let now = now_ms();
@@ -58,7 +58,7 @@ pub async fn list_models(State(state): State<AppState>, Extension(claims): Exten
     let visible_ids: std::collections::HashSet<uuid::Uuid> = if state.auth_enabled {
         crate::catalog_api::helpers::filter_visible(&state, principal,
             rows.iter().map(|r| (r.id, ())).collect(),
-            &[uc_types::Privilege::Owner, uc_types::Privilege::Select]).await?.into_iter().collect()
+            uc_types::Privilege::Select).await?.into_iter().collect()
     } else {
         rows.iter().map(|r| r.id).collect()
     };
@@ -80,7 +80,7 @@ pub async fn update_model(State(state): State<AppState>, Extension(claims): Exte
     let existing = ModelRepo::get_model_by_schema_and_name(&state.pool, schema.id, mdl).await?;
     if state.auth_enabled {
         let user = get_user(&state, &claims.sub).await?;
-        require_any(&state, user.id, existing.id, &[Privilege::Owner]).await?;
+        require(&state, user.id, existing.id, Privilege::Owner).await?;
     }
     let now = now_ms();
     if let Some(ref new_name) = req.new_name { validate_sql_name(new_name)?; }
@@ -111,7 +111,7 @@ pub async fn delete_model(State(state): State<AppState>, Extension(claims): Exte
     let existing = ModelRepo::get_model_by_schema_and_name(&state.pool, schema.id, mdl).await?;
     if state.auth_enabled {
         let user = get_user(&state, &claims.sub).await?;
-        require_any(&state, user.id, existing.id, &[Privilege::Owner]).await?;
+        require(&state, user.id, existing.id, Privilege::Owner).await?;
     }
     PropertyRepo::delete_for_entity(&state.pool, existing.id, "registered_model").await?;
     ModelRepo::delete_model(&state.pool, existing.id).await?;
@@ -170,7 +170,7 @@ pub async fn update_version(State(state): State<AppState>, Extension(claims): Ex
     let row = ModelRepo::get_version(&state.pool, model.id, ver).await?;
     if state.auth_enabled {
         let user = get_user(&state, &claims.sub).await?;
-        require_any(&state, user.id, model.id, &[Privilege::Owner]).await?;
+        require(&state, user.id, model.id, Privilege::Owner).await?;
     }
     let now = now_ms();
     sqlx::query("UPDATE uc_model_versions SET comment=COALESCE($1,comment), updated_at=$2, updated_by=$3 WHERE id=$4")

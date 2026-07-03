@@ -15,7 +15,7 @@ pub async fn create(State(state): State<AppState>, Extension(claims): Extension<
     let schema = SchemaRepo::get_by_full_name(&state.pool, &req.catalog_name, &req.schema_name).await?;
     if state.auth_enabled {
         let user = get_user(&state, &claims.sub).await?;
-        require_any(&state, user.id, schema.id, &[Privilege::Owner, Privilege::CreateVolume]).await?;
+        require(&state, user.id, schema.id, Privilege::CreateVolume).await?;
     }
     validate_sql_name(&req.name)?;
     let id = Uuid::new_v4(); let now = now_ms();
@@ -58,7 +58,7 @@ pub async fn list(State(state): State<AppState>, Extension(claims): Extension<Ar
     let visible_ids: std::collections::HashSet<uuid::Uuid> = if state.auth_enabled {
         crate::catalog_api::helpers::filter_visible(&state, principal,
             rows.iter().map(|r| (r.id, ())).collect(),
-            &[uc_types::Privilege::Owner, uc_types::Privilege::ReadVolume]).await?.into_iter().collect()
+            uc_types::Privilege::ReadVolume).await?.into_iter().collect()
     } else {
         rows.iter().map(|r| r.id).collect()
     };
@@ -80,7 +80,7 @@ pub async fn update(State(state): State<AppState>, Extension(claims): Extension<
     let existing = VolumeRepo::get_by_schema_and_name(&state.pool, schema.id, vol).await?;
     if state.auth_enabled {
         let user = get_user(&state, &claims.sub).await?;
-        require_any(&state, user.id, existing.id, &[Privilege::Owner]).await?;
+        require(&state, user.id, existing.id, Privilege::Owner).await?;
     }
     let row = VolumeRepo::update(&state.pool, existing.id, req.new_name.as_deref(), req.comment.as_deref(), req.owner.as_deref(), now_ms(), auth_sub(&state, &claims)).await?;
     if let Some(ref props) = req.properties {
@@ -96,7 +96,7 @@ pub async fn delete(State(state): State<AppState>, Extension(claims): Extension<
     let existing = VolumeRepo::get_by_schema_and_name(&state.pool, schema.id, vol).await?;
     if state.auth_enabled {
         let user = get_user(&state, &claims.sub).await?;
-        require_any(&state, user.id, existing.id, &[Privilege::Owner]).await?;
+        require(&state, user.id, existing.id, Privilege::Owner).await?;
     }
     state.authorizer.remove_hierarchy_children(existing.id).await?;
     PropertyRepo::delete_for_entity(&state.pool, existing.id, "volume").await?;

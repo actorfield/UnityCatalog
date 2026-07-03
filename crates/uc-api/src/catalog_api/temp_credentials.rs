@@ -24,7 +24,7 @@ pub async fn table_credentials(
             uc_openapi::catalog::CredentialOperation::Read => Privilege::Select,
             _ => Privilege::Modify,
         };
-        if !state.authorizer.authorize_any(user.id, table.id, &[Privilege::Owner, priv_needed]).await? {
+        if !state.authorizer.authorize(user.id, table.id, priv_needed).await? {
             return Err(UcError::permission_denied("Insufficient privileges on table"));
         }
     }
@@ -47,7 +47,7 @@ pub async fn volume_credentials(
             uc_openapi::catalog::CredentialOperation::ReadVolume => Privilege::ReadVolume,
             _ => Privilege::Owner,
         };
-        if !state.authorizer.authorize_any(user.id, volume.id, &[Privilege::Owner, priv_needed]).await? {
+        if !state.authorizer.authorize(user.id, volume.id, priv_needed).await? {
             return Err(UcError::permission_denied("Insufficient privileges on volume"));
         }
     }
@@ -93,7 +93,7 @@ pub async fn path_credentials(
             uc_openapi::catalog::CredentialOperation::Read => Privilege::ReadFiles,
             _ => Privilege::WriteFiles,
         };
-        if !state.authorizer.authorize_any(user.id, ext_loc.id, &[Privilege::Owner, required]).await? {
+        if !state.authorizer.authorize(user.id, ext_loc.id, required).await? {
             return Err(UcError::permission_denied(
                 format!("Insufficient privileges on external location '{}'", ext_loc.name),
             ));

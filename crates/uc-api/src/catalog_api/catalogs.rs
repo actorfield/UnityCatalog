@@ -27,7 +27,7 @@ pub async fn create(
     // Auth: caller needs CREATE_CATALOG on the metastore
     if state.auth_enabled {
         let user = get_user(&state, &claims.sub).await?;
-        let allowed = state.authorizer.authorize_any(user.id, state.metastore_id, &[Privilege::CreateCatalog, Privilege::Owner]).await?;
+        let allowed = state.authorizer.authorize(user.id, state.metastore_id, Privilege::CreateCatalog).await?;
         if !allowed {
             return Err(UcError::permission_denied("CREATE CATALOG privilege required on metastore"));
         }

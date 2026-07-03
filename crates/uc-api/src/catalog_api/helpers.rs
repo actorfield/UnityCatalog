@@ -29,8 +29,11 @@ pub async fn get_user(state: &AppState, sub: &str) -> Result<uc_db::models::user
         .ok_or_else(|| UcError::unauthenticated("User not found"))
 }
 
-pub async fn require_any(state: &AppState, principal: Uuid, resource: Uuid, privs: &[Privilege]) -> Result<(), UcError> {
-    if !state.authorizer.authorize_any(principal, resource, privs).await? {
+/// Require a single privilege on a resource. OWNER and ALL_PRIVILEGES are
+/// implied centrally by the casbin privilege hierarchy, so callers pass only the
+/// specific privilege they need -- no more `[Owner, X]` lists.
+pub async fn require(state: &AppState, principal: Uuid, resource: Uuid, privilege: Privilege) -> Result<(), UcError> {
+    if !state.authorizer.authorize(principal, resource, privilege).await? {
         return Err(UcError::permission_denied(format!("Insufficient privileges on {}", resource)));
     }
     Ok(())
@@ -74,7 +77,7 @@ pub async fn filter_visible(
     state: &AppState,
     principal: Option<Uuid>,
     resource_ids: Vec<(Uuid, impl Send)>,
-    view_privs: &[Privilege],
+    view_priv: Privilege,
 ) -> Result<Vec<Uuid>, UcError> {
     if !state.auth_enabled {
         return Ok(resource_ids.into_iter().map(|(id, _)| id).collect());
@@ -85,7 +88,9 @@ pub async fn filter_visible(
     };
     let mut visible = Vec::new();
     for (id, _) in resource_ids {
-        if state.authorizer.authorize_any(principal, id, view_privs).await? {
+        // OWNER is implied by the privilege hierarchy, so the single view
+        // privilege (e.g. SELECT / READ_VOLUME) is enough to make it visible.
+        if state.authorizer.authorize(principal, id, view_priv.clone()).await? {
             visible.push(id);
         }
     }
