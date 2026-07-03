@@ -14,13 +14,13 @@ pub struct ListParams { pub max_results: Option<i64>, pub page_token: Option<Str
 pub async fn create(State(state): State<AppState>, Extension(claims): Extension<Arc<UcClaims>>, Json(req): Json<CreateExternalLocation>) -> Result<Json<ExternalLocationInfo>, UcError> {
     if state.auth_enabled {
         let user = get_user(&state, &claims.sub).await?;
-        require_any(&state, user.id, state.metastore_id, &[Privilege::Owner, Privilege::CreateExternalLocation]).await?;
+        require(&state, user.id, state.metastore_id, Privilege::CreateExternalLocation).await?;
     }
     let cred = CredentialRepo::get_by_name(&state.pool, &req.credential_name).await?;
     // Also require OWNER or CREATE_EXTERNAL_LOCATION on the referenced credential
     if state.auth_enabled {
         if let Ok(ref user_val) = get_user(&state, &claims.sub).await {
-            require_any(&state, user_val.id, cred.id, &[uc_types::Privilege::Owner, uc_types::Privilege::CreateExternalLocation]).await?;
+            require(&state, user_val.id, cred.id, uc_types::Privilege::CreateExternalLocation).await?;
         }
     }
     let id = Uuid::new_v4();
@@ -59,7 +59,7 @@ pub async fn update(State(state): State<AppState>, Extension(claims): Extension<
     let existing = ExternalLocationRepo::get_by_name(&state.pool, &name).await?;
     if state.auth_enabled {
         let user = get_user(&state, &claims.sub).await?;
-        require_any(&state, user.id, existing.id, &[uc_types::Privilege::Owner]).await?;
+        require(&state, user.id, existing.id, uc_types::Privilege::Owner).await?;
     }
     let effective_name = req.new_name.as_deref().unwrap_or(&name);
     let now = now_ms();
@@ -89,7 +89,7 @@ pub async fn delete(State(state): State<AppState>, Extension(claims): Extension<
     if state.auth_enabled {
         let existing = ExternalLocationRepo::get_by_name(&state.pool, &name).await?;
         let user = get_user(&state, &claims.sub).await?;
-        require_any(&state, user.id, existing.id, &[Privilege::Owner]).await?;
+        require(&state, user.id, existing.id, Privilege::Owner).await?;
     }
     ExternalLocationRepo::delete(&state.pool, &name).await?;
     Ok(StatusCode::OK)

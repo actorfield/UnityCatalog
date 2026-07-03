@@ -7,6 +7,9 @@ use serde::{Deserialize, Serialize};
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum Privilege {
     Owner,
+    /// Databricks umbrella privilege: implies every concrete privilege on a
+    /// securable (but not OWNER's grant-management authority).
+    AllPrivileges,
     CreateCatalog,
     UseCatalog,
     CreateSchema,
@@ -33,6 +36,7 @@ impl Privilege {
     pub fn as_casbin_str(&self) -> &'static str {
         match self {
             Self::Owner => "OWNER",
+            Self::AllPrivileges => "ALL_PRIVILEGES",
             Self::CreateCatalog => "CREATE_CATALOG",
             Self::UseCatalog => "USE_CATALOG",
             Self::CreateSchema => "CREATE_SCHEMA",
@@ -58,6 +62,7 @@ impl Privilege {
     pub fn from_casbin_str(s: &str) -> Option<Self> {
         match s {
             "OWNER" => Some(Self::Owner),
+            "ALL_PRIVILEGES" => Some(Self::AllPrivileges),
             "CREATE_CATALOG" => Some(Self::CreateCatalog),
             "USE_CATALOG" => Some(Self::UseCatalog),
             "CREATE_SCHEMA" => Some(Self::CreateSchema),
@@ -79,6 +84,35 @@ impl Privilege {
             "CREATE_STORAGE_CREDENTIAL" => Some(Self::CreateStorageCredential),
             _ => None,
         }
+    }
+
+    /// Every concrete privilege — excludes the umbrella `Owner`/`AllPrivileges`,
+    /// which imply these via the hierarchy rather than being requested directly.
+    pub fn specific() -> &'static [Privilege] {
+        use Privilege::*;
+        &[
+            CreateCatalog, UseCatalog, CreateSchema, UseSchema, CreateTable,
+            Select, Modify, CreateFunction, Execute, CreateVolume, ReadVolume,
+            CreateModel, CreateExternalLocation, ReadFiles, WriteFiles,
+            CreateExternalTable, CreateExternalVolume, CreateManagedStorage,
+            CreateStorageCredential,
+        ]
+    }
+
+    /// Privilege-implication edges for the casbin `g3` grouping, expressed as
+    /// data (seeded into `casbin_rule`, not hardcoded in the matcher):
+    ///   `OWNER -> ALL_PRIVILEGES -> {every specific privilege}`.
+    /// A grant of a parent action satisfies a request for any descendant, so
+    /// e.g. an OWNER grant authorizes SELECT/MODIFY/READ_VOLUME/… centrally.
+    pub fn hierarchy_edges() -> Vec<(&'static str, &'static str)> {
+        let mut edges = vec![(
+            Privilege::Owner.as_casbin_str(),
+            Privilege::AllPrivileges.as_casbin_str(),
+        )];
+        for p in Privilege::specific() {
+            edges.push((Privilege::AllPrivileges.as_casbin_str(), p.as_casbin_str()));
+        }
+        edges
     }
 }
 
@@ -197,7 +231,7 @@ mod tests {
     fn all_privileges_round_trip_casbin() {
         // Every privilege must survive as_casbin_str → from_casbin_str
         let all = [
-            Privilege::Owner, Privilege::CreateCatalog, Privilege::UseCatalog,
+            Privilege::Owner, Privilege::AllPrivileges, Privilege::CreateCatalog, Privilege::UseCatalog,
             Privilege::CreateSchema, Privilege::UseSchema, Privilege::CreateTable,
             Privilege::Select, Privilege::Modify, Privilege::CreateFunction,
             Privilege::Execute, Privilege::CreateVolume, Privilege::ReadVolume,
@@ -212,6 +246,22 @@ mod tests {
                 .unwrap_or_else(|| panic!("from_casbin_str failed for {:?} -> '{}'", p, s));
             assert_eq!(*p, back);
         }
+    }
+
+    #[test]
+    fn hierarchy_edges_link_owner_all_and_specifics() {
+        let edges = Privilege::hierarchy_edges();
+        // OWNER -> ALL_PRIVILEGES
+        assert!(edges.contains(&("OWNER", "ALL_PRIVILEGES")));
+        // ALL_PRIVILEGES -> each specific (spot-check a few)
+        assert!(edges.contains(&("ALL_PRIVILEGES", "SELECT")));
+        assert!(edges.contains(&("ALL_PRIVILEGES", "MODIFY")));
+        assert!(edges.contains(&("ALL_PRIVILEGES", "READ_VOLUME")));
+        // one edge for OWNER->ALL plus one per specific privilege
+        assert_eq!(edges.len(), 1 + Privilege::specific().len());
+        // umbrella privileges are not themselves "specific"
+        assert!(!Privilege::specific().contains(&Privilege::Owner));
+        assert!(!Privilege::specific().contains(&Privilege::AllPrivileges));
     }
 
     #[test]

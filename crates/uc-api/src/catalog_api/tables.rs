@@ -28,7 +28,7 @@ pub async fn create(
     let schema = SchemaRepo::get_by_full_name(&state.pool, &req.catalog_name, &req.schema_name).await?;
     if state.auth_enabled {
         let user = get_user(&state, &claims.sub).await?;
-        require_any(&state, user.id, schema.id, &[Privilege::Owner, Privilege::CreateTable]).await?;
+        require(&state, user.id, schema.id, Privilege::CreateTable).await?;
     }
 
     validate_sql_name(&req.name)?;
@@ -60,9 +60,7 @@ pub async fn create(
                 // Validate caller owns the staging table
                 if state.auth_enabled {
                     let user = get_user(&state, &claims.sub).await?;
-                    if !state.authorizer.authorize_any(
-                        user.id, staging.id, &[Privilege::Owner]
-                    ).await? {
+                    if !state.authorizer.authorize(user.id, staging.id, Privilege::Owner).await? {
                         return Err(UcError::permission_denied(
                             "Only the staging table creator can commit it into a MANAGED table"
                         ));
@@ -148,8 +146,7 @@ pub async fn list(
     } else { None };
     let visible_ids: std::collections::HashSet<uuid::Uuid> = if state.auth_enabled {
         crate::catalog_api::helpers::filter_visible(&state, principal,
-            rows.iter().map(|r| (r.id, ())).collect(),
-            &[uc_types::Privilege::Owner, uc_types::Privilege::Select]).await?.into_iter().collect()
+            rows.iter().map(|r| (r.id, ())).collect(), uc_types::Privilege::Select).await?.into_iter().collect()
     } else {
         rows.iter().map(|r| r.id).collect()
     };
@@ -179,7 +176,7 @@ pub async fn delete(
     let row = TableRepo::get_by_schema_and_name(&state.pool, schema.id, tbl).await?;
     if state.auth_enabled {
         let user = get_user(&state, &claims.sub).await?;
-        require_any(&state, user.id, row.id, &[Privilege::Owner]).await?;
+        require(&state, user.id, row.id, Privilege::Owner).await?;
     }
     TableRepo::delete_columns(&state.pool, row.id).await?;
     PropertyRepo::delete_for_entity(&state.pool, row.id, "table").await?;

@@ -117,7 +117,16 @@ pub async fn update(
 
     if state.auth_enabled {
         let caller = get_user(&state, &claims.sub).await?;
-        if !state.authorizer.authorize_any(caller.id, resource_id, &[Privilege::Owner]).await? {
+        // Only an OWNER may manage a securable's grants (Databricks delegation:
+        // "only the owner can grant"). OWNER cascades through the object
+        // hierarchy, so a catalog/schema owner can grant on children. Metastore
+        // admins (OWNER on the metastore) may manage grants on ANY securable --
+        // an explicit override, since top-level securables like external
+        // locations / storage credentials are not linked to the metastore in g2.
+        let is_owner = state.authorizer.authorize(caller.id, resource_id, Privilege::Owner).await?;
+        let is_metastore_admin =
+            state.authorizer.authorize(caller.id, state.metastore_id, Privilege::Owner).await?;
+        if !is_owner && !is_metastore_admin {
             return Err(UcError::permission_denied("OWNER privilege required to manage permissions"));
         }
     }

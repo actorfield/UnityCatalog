@@ -14,7 +14,7 @@ pub struct ListParams { pub max_results: Option<i64>, pub page_token: Option<Str
 pub async fn create(State(state): State<AppState>, Extension(claims): Extension<Arc<UcClaims>>, Json(req): Json<CreateCredentialRequest>) -> Result<Json<CredentialInfo>, UcError> {
     if state.auth_enabled {
         let user = get_user(&state, &claims.sub).await?;
-        require_any(&state, user.id, state.metastore_id, &[Privilege::Owner, Privilege::CreateStorageCredential]).await?;
+        require(&state, user.id, state.metastore_id, Privilege::CreateStorageCredential).await?;
     }
     let id = Uuid::new_v4(); let now = now_ms();
     let credential_json = serde_json::to_string(&req.aws_iam_role).unwrap_or_default();
@@ -35,7 +35,7 @@ pub async fn create(State(state): State<AppState>, Extension(claims): Extension<
 pub async fn list(State(state): State<AppState>, Extension(claims): Extension<Arc<UcClaims>>, Query(params): Query<ListParams>) -> Result<Json<ListCredentialsResponse>, UcError> {
     if state.auth_enabled {
         let user = get_user(&state, &claims.sub).await?;
-        require_any(&state, user.id, state.metastore_id, &[Privilege::Owner, Privilege::CreateStorageCredential]).await?;
+        require(&state, user.id, state.metastore_id, Privilege::CreateStorageCredential).await?;
     }
     let max = params.max_results.unwrap_or(50).min(1000);
     let (rows, next_token) = CredentialRepo::list(&state.pool, params.page_token.as_deref(), max).await?;
@@ -47,7 +47,7 @@ pub async fn get(State(state): State<AppState>, Extension(claims): Extension<Arc
     let row = CredentialRepo::get_by_name(&state.pool, &name).await?;
     if state.auth_enabled {
         let user = get_user(&state, &claims.sub).await?;
-        require_any(&state, user.id, state.metastore_id, &[Privilege::Owner, Privilege::CreateStorageCredential]).await?;
+        require(&state, user.id, state.metastore_id, Privilege::CreateStorageCredential).await?;
     }
     Ok(Json(to_cred_info(row)))
 }
@@ -56,7 +56,7 @@ pub async fn update(State(state): State<AppState>, Extension(claims): Extension<
     let existing = CredentialRepo::get_by_name(&state.pool, &name).await?;
     if state.auth_enabled {
         let user = get_user(&state, &claims.sub).await?;
-        require_any(&state, user.id, existing.id, &[uc_types::Privilege::Owner]).await?;
+        require(&state, user.id, existing.id, uc_types::Privilege::Owner).await?;
     }
     let effective_name = req.new_name.as_deref().unwrap_or(&name);
     let now = now_ms();
@@ -80,7 +80,7 @@ pub async fn delete(State(state): State<AppState>, Extension(claims): Extension<
     if state.auth_enabled {
         let existing = CredentialRepo::get_by_name(&state.pool, &name).await?;
         let user = get_user(&state, &claims.sub).await?;
-        require_any(&state, user.id, existing.id, &[Privilege::Owner]).await?;
+        require(&state, user.id, existing.id, Privilege::Owner).await?;
     }
     CredentialRepo::delete(&state.pool, &name).await?;
     Ok(StatusCode::OK)

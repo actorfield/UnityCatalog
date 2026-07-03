@@ -16,7 +16,7 @@ pub async fn create(State(state): State<AppState>, Extension(claims): Extension<
     let schema = SchemaRepo::get_by_full_name(&state.pool, &fi.catalog_name, &fi.schema_name).await?;
     if state.auth_enabled {
         let user = get_user(&state, &claims.sub).await?;
-        require_any(&state, user.id, schema.id, &[Privilege::Owner, Privilege::CreateFunction]).await?;
+        require(&state, user.id, schema.id, Privilege::CreateFunction).await?;
     }
     validate_sql_name(&fi.name)?;
     let id = Uuid::new_v4(); let now = now_ms();
@@ -68,7 +68,7 @@ pub async fn list(State(state): State<AppState>, Extension(claims): Extension<Ar
     let visible_ids: std::collections::HashSet<uuid::Uuid> = if state.auth_enabled {
         crate::catalog_api::helpers::filter_visible(&state, principal,
             rows.iter().map(|r| (r.id, ())).collect(),
-            &[uc_types::Privilege::Owner, uc_types::Privilege::Execute]).await?.into_iter().collect()
+            uc_types::Privilege::Execute).await?.into_iter().collect()
     } else {
         rows.iter().map(|r| r.id).collect()
     };
@@ -91,7 +91,7 @@ pub async fn delete(State(state): State<AppState>, Extension(claims): Extension<
     let existing = FunctionRepo::get_by_schema_and_name(&state.pool, schema.id, func).await?;
     if state.auth_enabled {
         let user = get_user(&state, &claims.sub).await?;
-        require_any(&state, user.id, existing.id, &[Privilege::Owner]).await?;
+        require(&state, user.id, existing.id, Privilege::Owner).await?;
     }
     PropertyRepo::delete_for_entity(&state.pool, existing.id, "function").await?;
     FunctionRepo::delete(&state.pool, existing.id).await?;

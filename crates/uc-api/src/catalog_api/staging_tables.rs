@@ -21,7 +21,7 @@ pub async fn create(
 
     if state.auth_enabled {
         let user = get_user(&state, &claims.sub).await?;
-        require_any(&state, user.id, schema.id, &[Privilege::Owner, Privilege::CreateTable]).await?;
+        require(&state, user.id, schema.id, Privilege::CreateTable).await?;
     }
 
     let id = Uuid::new_v4();
