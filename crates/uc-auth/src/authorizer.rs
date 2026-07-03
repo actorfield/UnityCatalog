@@ -41,9 +41,10 @@ impl UcAuthorizer {
 
         let adapter = MemoryAdapter::default();
 
-        let enforcer = Enforcer::new(model, adapter)
+        let mut enforcer = Enforcer::new(model, adapter)
             .await
             .map_err(|e| UcError::new(ErrorCode::Internal, format!("Casbin enforcer init failed: {}", e)))?;
+        Self::seed_privilege_hierarchy(&mut enforcer).await?;
 
         Ok(Self { enforcer: Arc::new(RwLock::new(enforcer)) })
     }
@@ -62,11 +63,26 @@ impl UcAuthorizer {
             .await
             .map_err(|e| UcError::new(ErrorCode::Internal, format!("Casbin DB adapter init failed: {}", e)))?;
 
-        let enforcer = Enforcer::new(model, adapter)
+        let mut enforcer = Enforcer::new(model, adapter)
             .await
             .map_err(|e| UcError::new(ErrorCode::Internal, format!("Casbin enforcer init failed: {}", e)))?;
+        Self::seed_privilege_hierarchy(&mut enforcer).await?;
 
         Ok(Self { enforcer: Arc::new(RwLock::new(enforcer)) })
+    }
+
+    /// Seed the `g3` privilege-implication grouping (OWNER -> ALL_PRIVILEGES ->
+    /// specifics) from `Privilege::hierarchy_edges()`. Idempotent: the DB
+    /// adapter's INSERT-OR-IGNORE means re-seeding on every startup is a no-op,
+    /// so the hierarchy lives as data in `casbin_rule` alongside real grants.
+    async fn seed_privilege_hierarchy(enforcer: &mut Enforcer) -> Result<(), UcError> {
+        for (parent, child) in Privilege::hierarchy_edges() {
+            enforcer
+                .add_named_grouping_policy("g3", vec![parent.to_string(), child.to_string()])
+                .await
+                .map_err(|e| UcError::new(ErrorCode::Internal, format!("Casbin seed g3 failed: {}", e)))?;
+        }
+        Ok(())
     }
 
     /// Initialize the admin user with OWNER on the metastore.
@@ -328,5 +344,81 @@ mod tests {
         // Should not error
         auth.add_hierarchy_child(parent, child).await.unwrap();
         auth.remove_hierarchy_children(parent).await.unwrap();
+    }
+
+    // ── Privilege hierarchy (g3): implication ─────────────────────────────────
+
+    #[tokio::test]
+    async fn owner_implies_all_specific_privileges() {
+        let auth = UcAuthorizer::new_in_memory().await.unwrap();
+        let p = Uuid::new_v4();
+        let r = Uuid::new_v4();
+        auth.grant(p, r, Privilege::Owner).await.unwrap();
+        for req in [
+            Privilege::Select, Privilege::Modify, Privilege::ReadVolume,
+            Privilege::WriteFiles, Privilege::UseSchema, Privilege::CreateTable,
+        ] {
+            assert!(
+                auth.authorize(p, r, req.clone()).await.unwrap(),
+                "OWNER must imply {:?}", req
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn all_privileges_implies_specifics_but_not_owner() {
+        let auth = UcAuthorizer::new_in_memory().await.unwrap();
+        let p = Uuid::new_v4();
+        let r = Uuid::new_v4();
+        auth.grant(p, r, Privilege::AllPrivileges).await.unwrap();
+        assert!(auth.authorize(p, r, Privilege::Select).await.unwrap());
+        assert!(auth.authorize(p, r, Privilege::Modify).await.unwrap());
+        // ALL_PRIVILEGES is not OWNER -- it confers no grant-management authority.
+        assert!(!auth.authorize(p, r, Privilege::Owner).await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn specific_grant_does_not_imply_others() {
+        let auth = UcAuthorizer::new_in_memory().await.unwrap();
+        let p = Uuid::new_v4();
+        let r = Uuid::new_v4();
+        auth.grant(p, r, Privilege::Select).await.unwrap();
+        assert!(auth.authorize(p, r, Privilege::Select).await.unwrap());
+        assert!(!auth.authorize(p, r, Privilege::Modify).await.unwrap());
+        assert!(!auth.authorize(p, r, Privilege::Owner).await.unwrap());
+    }
+
+    // ── Object hierarchy (g2): cascade + direction ────────────────────────────
+
+    #[tokio::test]
+    async fn owner_cascades_down_object_hierarchy() {
+        let auth = UcAuthorizer::new_in_memory().await.unwrap();
+        let user = Uuid::new_v4();
+        let catalog = Uuid::new_v4();
+        let schema = Uuid::new_v4();
+        let table = Uuid::new_v4();
+        auth.add_hierarchy_child(catalog, schema).await.unwrap();
+        auth.add_hierarchy_child(schema, table).await.unwrap();
+        auth.grant(user, catalog, Privilege::Owner).await.unwrap();
+        // OWNER on the catalog cascades to schema + table, implying specifics.
+        assert!(auth.authorize(user, schema, Privilege::Owner).await.unwrap());
+        assert!(auth.authorize(user, table, Privilege::Select).await.unwrap());
+        assert!(auth.authorize(user, table, Privilege::Modify).await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn grant_on_parent_covers_child_not_upward() {
+        let auth = UcAuthorizer::new_in_memory().await.unwrap();
+        let schema = Uuid::new_v4();
+        let table = Uuid::new_v4();
+        auth.add_hierarchy_child(schema, table).await.unwrap();
+        // SELECT on the schema covers the child table (downward inheritance).
+        let owner = Uuid::new_v4();
+        auth.grant(owner, schema, Privilege::Select).await.unwrap();
+        assert!(auth.authorize(owner, table, Privilege::Select).await.unwrap());
+        // A grant on the child must NOT leak upward to the parent.
+        let other = Uuid::new_v4();
+        auth.grant(other, table, Privilege::Select).await.unwrap();
+        assert!(!auth.authorize(other, schema, Privilege::Select).await.unwrap());
     }
 }
