@@ -421,4 +421,41 @@ mod tests {
         auth.grant(other, table, Privilege::Select).await.unwrap();
         assert!(!auth.authorize(other, schema, Privilege::Select).await.unwrap());
     }
+
+    // ── ABAC capability ───────────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn casbin_engine_supports_abac_attributes() {
+        // The casbin engine UC already uses evaluates attribute-based matchers
+        // natively (no feature flag / dependency change): future ABAC rules
+        // (governed tags, ownership conditions) are additive on top of the RBAC
+        // model, not a re-architecture. This proves the capability in isolation.
+        use casbin::{DefaultModel, MemoryAdapter};
+        use serde::Serialize;
+
+        let abac = "\
+[request_definition]
+r = sub, obj
+
+[policy_definition]
+p = sub, obj
+
+[policy_effect]
+e = some(where (p.eft == allow))
+
+[matchers]
+m = r.sub == r.obj.owner
+";
+        let model = DefaultModel::from_str(abac).await.unwrap();
+        let enforcer = Enforcer::new(model, MemoryAdapter::default()).await.unwrap();
+
+        #[derive(Serialize, Hash)]
+        struct Resource<'a> {
+            owner: &'a str,
+        }
+
+        // Attribute match: caller == resource.owner -> allowed; else denied.
+        assert!(enforcer.enforce(("alice", Resource { owner: "alice" })).unwrap());
+        assert!(!enforcer.enforce(("alice", Resource { owner: "bob" })).unwrap());
+    }
 }
