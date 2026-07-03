@@ -1,31 +1,29 @@
+use axum::body::to_bytes;
 /// Shared test infrastructure for in-process axum handler tests.
 ///
 /// Uses tower::ServiceExt::oneshot() to send requests directly to the axum Router
 /// without starting a TCP server. SQLite in-memory database per test.
 use axum::{
     body::Body,
-    http::{Request, StatusCode, header},
+    http::{header, Request, StatusCode},
     Router,
 };
-use axum::body::to_bytes;
 use serde_json::Value;
 use std::sync::Arc;
 use tower::ServiceExt;
+use uc_api::{catalog_api, control_api, delta_api, middleware::auth_middleware, state::AppState};
 use uc_auth::{AllowingAuthorizer, JwtConfig, KeyManager, OidcConfig};
 use uc_credentials::CloudCredentialVendor;
 use uc_db::{pool::run_migrations, AnyPool};
-use uc_api::{
-    catalog_api, control_api, delta_api,
-    middleware::auth_middleware,
-    state::AppState,
-};
 
 /// Build a test app with in-memory SQLite and AllowingAuthorizer (no-auth mode).
 pub async fn build_test_app() -> (Router, AnyPool) {
-    let pool = AnyPool::connect("sqlite::memory:").await.expect("in-memory sqlite");
+    let pool = AnyPool::connect("sqlite::memory:")
+        .await
+        .expect("in-memory sqlite");
     run_migrations(&pool).await.expect("migrations");
 
-    let metastore = uc_db::repos::MetastoreRepo::get_or_init(&pool, "test-metastore")
+    let metastore = uc_db::repos::metastore::get_or_init(&pool, "test-metastore")
         .await
         .expect("metastore init");
 
@@ -33,8 +31,9 @@ pub async fn build_test_app() -> (Router, AnyPool) {
     let config_dir = std::env::temp_dir().join(format!("uc_test_{}", uuid::Uuid::new_v4()));
     std::fs::create_dir_all(&config_dir).expect("create config dir");
     let km = KeyManager::load_or_generate(&config_dir).expect("key gen");
-    let jwt_config = JwtConfig::from_der(&km.private_key_der, &km.public_key_der, km.key_id.clone())
-        .expect("jwt config");
+    let jwt_config =
+        JwtConfig::from_der(&km.private_key_der, &km.public_key_der, km.key_id.clone())
+            .expect("jwt config");
 
     let state = AppState::new(
         pool.clone(),
@@ -44,7 +43,7 @@ pub async fn build_test_app() -> (Router, AnyPool) {
         metastore.id,
         false, // no-auth
         config_dir,
-        None,  // no OIDC in tests
+        None, // no OIDC in tests
     );
 
     let app = Router::new()
@@ -52,7 +51,10 @@ pub async fn build_test_app() -> (Router, AnyPool) {
         .merge(control_api::router(state.clone()))
         .merge(delta_api::router(state.clone()))
         .route("/", axum::routing::get(|| async { "ok" }))
-        .layer(axum::middleware::from_fn_with_state(state.clone(), auth_middleware));
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            auth_middleware,
+        ));
 
     (app, pool)
 }
@@ -107,7 +109,11 @@ pub async fn delete(app: &Router, uri: &str) -> StatusCode {
 }
 
 pub async fn delete_with_query(app: &Router, uri: &str, query: &str) -> StatusCode {
-    let full = if query.is_empty() { uri.to_string() } else { format!("{}?{}", uri, query) };
+    let full = if query.is_empty() {
+        uri.to_string()
+    } else {
+        format!("{}?{}", uri, query)
+    };
     let req = Request::builder()
         .method("DELETE")
         .uri(&full)
@@ -124,18 +130,21 @@ pub const DELTA: &str = "/delta/v1";
 /// Build a test app with auth ENABLED and an optional OIDC config.
 /// Uses AllowingAuthorizer so permission checks always pass.
 pub async fn build_auth_test_app(oidc_config: Option<Arc<OidcConfig>>) -> Router {
-    let pool = AnyPool::connect("sqlite::memory:").await.expect("in-memory sqlite");
+    let pool = AnyPool::connect("sqlite::memory:")
+        .await
+        .expect("in-memory sqlite");
     run_migrations(&pool).await.expect("migrations");
 
-    let metastore = uc_db::repos::MetastoreRepo::get_or_init(&pool, "auth-test-metastore")
+    let metastore = uc_db::repos::metastore::get_or_init(&pool, "auth-test-metastore")
         .await
         .expect("metastore init");
 
     let config_dir = std::env::temp_dir().join(format!("uc_auth_test_{}", uuid::Uuid::now_v7()));
     std::fs::create_dir_all(&config_dir).expect("create config dir");
     let km = KeyManager::load_or_generate(&config_dir).expect("key gen");
-    let jwt_config = JwtConfig::from_der(&km.private_key_der, &km.public_key_der, km.key_id.clone())
-        .expect("jwt config");
+    let jwt_config =
+        JwtConfig::from_der(&km.private_key_der, &km.public_key_der, km.key_id.clone())
+            .expect("jwt config");
 
     let state = AppState::new(
         pool,
@@ -153,7 +162,10 @@ pub async fn build_auth_test_app(oidc_config: Option<Arc<OidcConfig>>) -> Router
         .merge(control_api::router(state.clone()))
         .merge(delta_api::router(state.clone()))
         .route("/", axum::routing::get(|| async { "ok" }))
-        .layer(axum::middleware::from_fn_with_state(state.clone(), auth_middleware))
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            auth_middleware,
+        ))
 }
 
 /// Send a GET with an explicit Authorization: Bearer header.

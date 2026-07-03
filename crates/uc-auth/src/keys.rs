@@ -1,6 +1,10 @@
-use rsa::{pkcs1::{DecodeRsaPublicKey, EncodeRsaPrivateKey, EncodeRsaPublicKey}, traits::PublicKeyParts, RsaPrivateKey, RsaPublicKey};
-use uc_errors::{ErrorCode, UcError};
+use rsa::{
+    pkcs1::{DecodeRsaPublicKey, EncodeRsaPrivateKey, EncodeRsaPublicKey},
+    traits::PublicKeyParts,
+    RsaPrivateKey, RsaPublicKey,
+};
 use std::path::Path;
+use uc_errors::{ErrorCode, UcError};
 
 const RSA_BITS: usize = 2048;
 
@@ -14,8 +18,12 @@ impl KeyManager {
     /// Generate a new RSA-2048 key pair.
     pub fn generate() -> Result<Self, UcError> {
         let mut rng = rand::thread_rng();
-        let private_key = RsaPrivateKey::new(&mut rng, RSA_BITS)
-            .map_err(|e| UcError::new(ErrorCode::Internal, format!("RSA key generation failed: {}", e)))?;
+        let private_key = RsaPrivateKey::new(&mut rng, RSA_BITS).map_err(|e| {
+            UcError::new(
+                ErrorCode::Internal,
+                format!("RSA key generation failed: {}", e),
+            )
+        })?;
         let public_key = RsaPublicKey::from(&private_key);
 
         // jsonwebtoken 9 expects PKCS#1 DER format (not PKCS#8)
@@ -33,14 +41,18 @@ impl KeyManager {
 
         let key_id = hex::encode(rand::random::<[u8; 16]>());
 
-        Ok(Self { private_key_der: private_der, public_key_der: public_der, key_id })
+        Ok(Self {
+            private_key_der: private_der,
+            public_key_der: public_der,
+            key_id,
+        })
     }
 
     /// Load from DER files, generating them if they do not exist.
     pub fn load_or_generate(config_dir: &Path) -> Result<Self, UcError> {
         let priv_path = config_dir.join("private_key.der");
-        let pub_path  = config_dir.join("public_key.der");
-        let kid_path  = config_dir.join("key_id.txt");
+        let pub_path = config_dir.join("public_key.der");
+        let kid_path = config_dir.join("key_id.txt");
 
         if priv_path.exists() && pub_path.exists() && kid_path.exists() {
             let private_key_der = std::fs::read(&priv_path)
@@ -51,7 +63,11 @@ impl KeyManager {
                 .map_err(|e| UcError::new(ErrorCode::Internal, e.to_string()))?
                 .trim()
                 .to_string();
-            return Ok(Self { private_key_der, public_key_der, key_id });
+            return Ok(Self {
+                private_key_der,
+                public_key_der,
+                key_id,
+            });
         }
 
         // Generate and persist
@@ -95,7 +111,9 @@ fn build_jwks(km: &KeyManager) -> String {
         Err(_) => {
             // Fallback: won't validate but at least returns a parseable JWKS
             let n_b64 = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(&km.public_key_der);
-            format!(r#"{{"keys":[{{"kty":"RSA","use":"sig","kid":"{kid}","n":"{n_b64}","e":"AQAB"}}]}}"#)
+            format!(
+                r#"{{"keys":[{{"kty":"RSA","use":"sig","kid":"{kid}","n":"{n_b64}","e":"AQAB"}}]}}"#
+            )
         }
     }
 }

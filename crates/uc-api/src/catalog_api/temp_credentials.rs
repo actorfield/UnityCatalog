@@ -1,22 +1,22 @@
+use crate::{catalog_api::helpers::get_user, state::AppState};
 use axum::{extract::State, Extension, Json};
 use std::sync::Arc;
 use uc_auth::UcClaims;
 use uc_credentials::context::{CredentialContext, CredentialOperation};
-use uc_db::repos::{CredentialRepo, ExternalLocationRepo, TableRepo, VolumeRepo};
+use uc_db::repos::{credential, external_location, table, volume};
 use uc_errors::{ErrorCode, UcError};
 use uc_openapi::catalog::{
     GenerateTemporaryModelVersionCredential, GenerateTemporaryPathCredential,
     GenerateTemporaryTableCredential, GenerateTemporaryVolumeCredential, TemporaryCredentials,
 };
 use uc_types::{Privilege, UriScheme};
-use crate::{catalog_api::helpers::get_user, state::AppState};
 
 pub async fn table_credentials(
     State(state): State<AppState>,
     Extension(claims): Extension<Arc<UcClaims>>,
     Json(req): Json<GenerateTemporaryTableCredential>,
 ) -> Result<Json<TemporaryCredentials>, UcError> {
-    let table = TableRepo::get_by_id(&state.pool, req.table_id).await?;
+    let table = table::get_by_id(&state.pool, req.table_id).await?;
 
     if state.auth_enabled {
         let user = get_user(&state, &claims.sub).await?;
@@ -24,13 +24,25 @@ pub async fn table_credentials(
             uc_openapi::catalog::CredentialOperation::Read => Privilege::Select,
             _ => Privilege::Modify,
         };
-        if !state.authorizer.authorize(user.id, table.id, priv_needed).await? {
-            return Err(UcError::permission_denied("Insufficient privileges on table"));
+        if !state
+            .authorizer
+            .authorize(user.id, table.id, priv_needed)
+            .await?
+        {
+            return Err(UcError::permission_denied(
+                "Insufficient privileges on table",
+            ));
         }
     }
 
     let url = table.url.unwrap_or_default();
-    let ctx = build_ctx(&url, to_internal_op(&req.operation), Some(req.table_id), &state).await?;
+    let ctx = build_ctx(
+        &url,
+        to_internal_op(&req.operation),
+        Some(req.table_id),
+        &state,
+    )
+    .await?;
     Ok(Json(state.credential_vendor.vend(&ctx).await?))
 }
 
@@ -39,7 +51,7 @@ pub async fn volume_credentials(
     Extension(claims): Extension<Arc<UcClaims>>,
     Json(req): Json<GenerateTemporaryVolumeCredential>,
 ) -> Result<Json<TemporaryCredentials>, UcError> {
-    let volume = VolumeRepo::get_by_id(&state.pool, req.volume_id).await?;
+    let volume = volume::get_by_id(&state.pool, req.volume_id).await?;
 
     if state.auth_enabled {
         let user = get_user(&state, &claims.sub).await?;
@@ -47,8 +59,14 @@ pub async fn volume_credentials(
             uc_openapi::catalog::CredentialOperation::ReadVolume => Privilege::ReadVolume,
             _ => Privilege::Owner,
         };
-        if !state.authorizer.authorize(user.id, volume.id, priv_needed).await? {
-            return Err(UcError::permission_denied("Insufficient privileges on volume"));
+        if !state
+            .authorizer
+            .authorize(user.id, volume.id, priv_needed)
+            .await?
+        {
+            return Err(UcError::permission_denied(
+                "Insufficient privileges on volume",
+            ));
         }
     }
 
@@ -62,10 +80,11 @@ pub async fn model_version_credentials(
     Extension(_claims): Extension<Arc<UcClaims>>,
     Json(req): Json<GenerateTemporaryModelVersionCredential>,
 ) -> Result<Json<TemporaryCredentials>, UcError> {
-    use uc_db::repos::{ModelRepo, SchemaRepo};
-    let schema = SchemaRepo::get_by_full_name(&state.pool, &req.catalog_name, &req.schema_name).await?;
-    let model = ModelRepo::get_model_by_schema_and_name(&state.pool, schema.id, &req.model_name).await?;
-    let version = ModelRepo::get_version(&state.pool, model.id, req.version as i32).await?;
+    use uc_db::repos::{model, schema};
+    let schema = schema::get_by_full_name(&state.pool, &req.catalog_name, &req.schema_name).await?;
+    let model =
+        model::get_model_by_schema_and_name(&state.pool, schema.id, &req.model_name).await?;
+    let version = model::get_version(&state.pool, model.id, req.version as i32).await?;
     let url = version.url.or(model.url).unwrap_or_default();
     let ctx = build_ctx(&url, to_internal_op(&req.operation), None, &state).await?;
     Ok(Json(state.credential_vendor.vend(&ctx).await?))
@@ -82,21 +101,29 @@ pub async fn path_credentials(
         let user = get_user(&state, &claims.sub).await?;
 
         // Find the external location whose URL is a prefix of the requested path
-        let ext_loc = ExternalLocationRepo::find_by_path_prefix(&state.pool, &req.url).await?
-            .ok_or_else(|| UcError::new(
-                ErrorCode::NotFound,
-                format!("No external location found covering path '{}'", req.url),
-            ))?;
+        let ext_loc = external_location::find_by_path_prefix(&state.pool, &req.url)
+            .await?
+            .ok_or_else(|| {
+                UcError::new(
+                    ErrorCode::NotFound,
+                    format!("No external location found covering path '{}'", req.url),
+                )
+            })?;
 
         // Require READ_FILES or WRITE_FILES on the external location (not OWNER on metastore)
         let required = match req.operation {
             uc_openapi::catalog::CredentialOperation::Read => Privilege::ReadFiles,
             _ => Privilege::WriteFiles,
         };
-        if !state.authorizer.authorize(user.id, ext_loc.id, required).await? {
-            return Err(UcError::permission_denied(
-                format!("Insufficient privileges on external location '{}'", ext_loc.name),
-            ));
+        if !state
+            .authorizer
+            .authorize(user.id, ext_loc.id, required)
+            .await?
+        {
+            return Err(UcError::permission_denied(format!(
+                "Insufficient privileges on external location '{}'",
+                ext_loc.name
+            )));
         }
     }
 
@@ -113,7 +140,9 @@ fn to_internal_op(op: &uc_openapi::catalog::CredentialOperation) -> CredentialOp
     use uc_openapi::catalog::CredentialOperation as Op;
     match op {
         Op::Read | Op::ReadVolume | Op::ReadModelVersion => CredentialOperation::Read,
-        Op::ReadWrite | Op::WriteVolume | Op::ReadWriteModelVersion => CredentialOperation::ReadWrite,
+        Op::ReadWrite | Op::WriteVolume | Op::ReadWriteModelVersion => {
+            CredentialOperation::ReadWrite
+        }
     }
 }
 
@@ -132,13 +161,16 @@ async fn build_ctx(
             (None, None, None)
         } else {
             // Look up the external location covering this URL to get the credential
-            match ExternalLocationRepo::find_by_path_prefix(&state.pool, url).await? {
+            match external_location::find_by_path_prefix(&state.pool, url).await? {
                 Some(ext_loc) => {
-                    let cred = CredentialRepo::get_by_id(&state.pool, ext_loc.credential_id).await?;
+                    let cred = credential::get_by_id(&state.pool, ext_loc.credential_id).await?;
                     // credential column is a JSON blob — parse role_arn from it
-                    let role_arn: Option<String> = serde_json::from_str::<serde_json::Value>(&cred.credential)
-                        .ok()
-                        .and_then(|v| v.get("role_arn").and_then(|r| r.as_str()).map(String::from));
+                    let role_arn: Option<String> =
+                        serde_json::from_str::<serde_json::Value>(&cred.credential)
+                            .ok()
+                            .and_then(|v| {
+                                v.get("role_arn").and_then(|r| r.as_str()).map(String::from)
+                            });
                     (role_arn, None, Some(cred.credential))
                 }
                 None => (None, None, None),

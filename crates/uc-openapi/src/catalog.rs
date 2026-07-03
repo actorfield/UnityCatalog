@@ -5,7 +5,9 @@ use uuid::Uuid;
 
 /// Deserialize `properties` as either a `HashMap<String,String>` or a JSON string containing one.
 /// The Java client sends `properties: "{}"` (a string), not `properties: {}` (an object).
-pub fn deser_props_or_string<'de, D>(deserializer: D) -> Result<Option<HashMap<String, String>>, D::Error>
+pub fn deser_props_or_string<'de, D>(
+    deserializer: D,
+) -> Result<Option<HashMap<String, String>>, D::Error>
 where
     D: Deserializer<'de>,
 {
@@ -443,7 +445,11 @@ pub struct FunctionInfo {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub comment: Option<String>,
     /// Accepts either a JSON map {"k":"v"} or a legacy string "{}" from the Java client.
-    #[serde(skip_serializing_if = "Option::is_none", default, deserialize_with = "deser_props_or_string")]
+    #[serde(
+        skip_serializing_if = "Option::is_none",
+        default,
+        deserialize_with = "deser_props_or_string"
+    )]
     pub properties: Option<HashMap<String, String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub full_name: Option<String>,
@@ -767,8 +773,7 @@ pub struct UpdatePermissions {
 
 // ── Temporary Credentials ─────────────────────────────────────────────────────
 
-#[derive(Debug, Serialize, Deserialize)]
-#[derive(Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct AwsCredentials {
     pub access_key_id: String,
     pub secret_access_key: String,
@@ -777,20 +782,17 @@ pub struct AwsCredentials {
     pub expiration: Option<String>,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
-#[derive(Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct AzureUserDelegationSas {
     pub sas_token: String,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
-#[derive(Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct GcpOauthToken {
     pub oauth_token: String,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
-#[derive(Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct TemporaryCredentials {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub aws_temp_credentials: Option<AwsCredentials>,

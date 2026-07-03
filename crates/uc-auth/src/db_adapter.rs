@@ -38,7 +38,10 @@ pub struct SqlxAdapter {
 
 impl SqlxAdapter {
     pub async fn new(pool: uc_db::AnyPool) -> CasbinResult<Self> {
-        Ok(Self { pool, is_filtered: false })
+        Ok(Self {
+            pool,
+            is_filtered: false,
+        })
     }
 
     async fn load_all(&self) -> CasbinResult<Vec<CasbinRuleRow>> {
@@ -47,9 +50,7 @@ impl SqlxAdapter {
         )
         .fetch_all(&self.pool)
         .await
-        .map_err(|e| casbin::Error::AdapterError(
-            casbin::error::AdapterError(Box::new(e))
-        ))
+        .map_err(|e| casbin::Error::AdapterError(casbin::error::AdapterError(Box::new(e))))
     }
 
     async fn insert_rule(&self, ptype: &str, rule: &[String]) -> CasbinResult<bool> {
@@ -110,7 +111,11 @@ impl Adapter for SqlxAdapter {
         Ok(())
     }
 
-    async fn load_filtered_policy<'a>(&mut self, model: &mut dyn Model, _filter: Filter<'a>) -> CasbinResult<()> {
+    async fn load_filtered_policy<'a>(
+        &mut self,
+        model: &mut dyn Model,
+        _filter: Filter<'a>,
+    ) -> CasbinResult<()> {
         // Simplified: load all (filtering not needed for our use case)
         self.is_filtered = false;
         self.load_policy(model).await
@@ -130,15 +135,21 @@ impl Adapter for SqlxAdapter {
             }
         }
 
-        let mut tx = self.pool.begin().await
-            .map_err(|e| casbin::Error::AdapterError(casbin::error::AdapterError(Box::new(e))))?;
+        let mut tx =
+            self.pool.begin().await.map_err(|e| {
+                casbin::Error::AdapterError(casbin::error::AdapterError(Box::new(e)))
+            })?;
         sqlx::query("DELETE FROM casbin_rule")
             .execute(&mut *tx)
             .await
             .map_err(|e| casbin::Error::AdapterError(casbin::error::AdapterError(Box::new(e))))?;
         for (ptype, rule) in &all_rules {
             let vals: Vec<&str> = rule.iter().map(|s| s.as_str()).collect();
-            let v: Vec<&str> = { let mut v = vals.clone(); v.resize(6, ""); v };
+            let v: Vec<&str> = {
+                let mut v = vals.clone();
+                v.resize(6, "");
+                v
+            };
             sqlx::query(
                 "INSERT OR IGNORE INTO casbin_rule (ptype, v0, v1, v2, v3, v4, v5) VALUES ($1,$2,$3,$4,$5,$6,$7)",
             )
@@ -148,16 +159,27 @@ impl Adapter for SqlxAdapter {
             .await
             .map_err(|e| casbin::Error::AdapterError(casbin::error::AdapterError(Box::new(e))))?;
         }
-        tx.commit().await
+        tx.commit()
+            .await
             .map_err(|e| casbin::Error::AdapterError(casbin::error::AdapterError(Box::new(e))))?;
         Ok(())
     }
 
-    async fn add_policy(&mut self, _sec: &str, ptype: &str, rule: Vec<String>) -> CasbinResult<bool> {
+    async fn add_policy(
+        &mut self,
+        _sec: &str,
+        ptype: &str,
+        rule: Vec<String>,
+    ) -> CasbinResult<bool> {
         self.insert_rule(ptype, &rule).await
     }
 
-    async fn add_policies(&mut self, _sec: &str, ptype: &str, rules: Vec<Vec<String>>) -> CasbinResult<bool> {
+    async fn add_policies(
+        &mut self,
+        _sec: &str,
+        ptype: &str,
+        rules: Vec<Vec<String>>,
+    ) -> CasbinResult<bool> {
         let mut all_ok = true;
         for rule in rules {
             if !self.insert_rule(ptype, &rule).await? {
@@ -167,11 +189,21 @@ impl Adapter for SqlxAdapter {
         Ok(all_ok)
     }
 
-    async fn remove_policy(&mut self, _sec: &str, ptype: &str, rule: Vec<String>) -> CasbinResult<bool> {
+    async fn remove_policy(
+        &mut self,
+        _sec: &str,
+        ptype: &str,
+        rule: Vec<String>,
+    ) -> CasbinResult<bool> {
         self.delete_rule(ptype, &rule).await
     }
 
-    async fn remove_policies(&mut self, _sec: &str, ptype: &str, rules: Vec<Vec<String>>) -> CasbinResult<bool> {
+    async fn remove_policies(
+        &mut self,
+        _sec: &str,
+        ptype: &str,
+        rules: Vec<Vec<String>>,
+    ) -> CasbinResult<bool> {
         let mut all_ok = true;
         for rule in rules {
             if !self.delete_rule(ptype, &rule).await? {
@@ -181,7 +213,13 @@ impl Adapter for SqlxAdapter {
         Ok(all_ok)
     }
 
-    async fn remove_filtered_policy(&mut self, _sec: &str, ptype: &str, field_index: usize, field_values: Vec<String>) -> CasbinResult<bool> {
+    async fn remove_filtered_policy(
+        &mut self,
+        _sec: &str,
+        ptype: &str,
+        field_index: usize,
+        field_values: Vec<String>,
+    ) -> CasbinResult<bool> {
         // Use fully parameterized DELETE to prevent SQL injection.
         // Columns v0..v5 are fixed schema — we select the right WHERE clause
         // by fetching all matching rows and deleting by their IDs.
@@ -189,10 +227,16 @@ impl Adapter for SqlxAdapter {
         let _col_names = ["v0", "v1", "v2", "v3", "v4", "v5"];
         let mut deleted = false;
         for row in &rows {
-            if row.ptype != ptype { continue; }
+            if row.ptype != ptype {
+                continue;
+            }
             let row_vals = [&row.v0, &row.v1, &row.v2, &row.v3, &row.v4, &row.v5];
             let matches = field_values.iter().enumerate().all(|(i, val)| {
-                if val.is_empty() { true } else { row_vals[field_index + i] == val }
+                if val.is_empty() {
+                    true
+                } else {
+                    row_vals[field_index + i] == val
+                }
             });
             if matches {
                 let result = sqlx::query(
@@ -203,7 +247,9 @@ impl Adapter for SqlxAdapter {
                 .execute(&self.pool)
                 .await
                 .map_err(|e| casbin::Error::AdapterError(casbin::error::AdapterError(Box::new(e))))?;
-                if result.rows_affected() > 0 { deleted = true; }
+                if result.rows_affected() > 0 {
+                    deleted = true;
+                }
             }
         }
         Ok(deleted)
@@ -225,15 +271,13 @@ impl Adapter for SqlxAdapter {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{UcAuthorizer, Authorizer};
+    use crate::{Authorizer, UcAuthorizer};
     use uc_db::AnyPool;
     use uc_types::Privilege;
     use uuid::Uuid;
 
     async fn in_memory_sqlite() -> AnyPool {
-        let pool = AnyPool::connect("sqlite::memory:")
-            .await
-            .unwrap();
+        let pool = AnyPool::connect("sqlite::memory:").await.unwrap();
         uc_db::pool::run_migrations(&pool).await.unwrap();
         pool
     }
@@ -250,13 +294,22 @@ mod tests {
 
         // First "run" — grant Owner
         let auth1 = UcAuthorizer::new_with_db(pool.clone()).await.unwrap();
-        auth1.grant(principal, resource, Privilege::Owner).await.unwrap();
-        assert!(auth1.authorize(principal, resource, Privilege::Owner).await.unwrap());
+        auth1
+            .grant(principal, resource, Privilege::Owner)
+            .await
+            .unwrap();
+        assert!(auth1
+            .authorize(principal, resource, Privilege::Owner)
+            .await
+            .unwrap());
 
         // Simulate restart — new authorizer, same DB
         let auth2 = UcAuthorizer::new_with_db(pool.clone()).await.unwrap();
         assert!(
-            auth2.authorize(principal, resource, Privilege::Owner).await.unwrap(),
+            auth2
+                .authorize(principal, resource, Privilege::Owner)
+                .await
+                .unwrap(),
             "Owner privilege must survive a restart (load_policy must use correct sec key)"
         );
     }
@@ -269,11 +322,24 @@ mod tests {
         let metastore = Uuid::new_v4();
 
         let auth1 = UcAuthorizer::new_with_db(pool.clone()).await.unwrap();
-        auth1.grant(admin, metastore, Privilege::Owner).await.unwrap();
+        auth1
+            .grant(admin, metastore, Privilege::Owner)
+            .await
+            .unwrap();
 
         // Simulate restart
         let auth2 = UcAuthorizer::new_with_db(pool.clone()).await.unwrap();
-        let allowed = auth2.authorize_any(admin, metastore, &[Privilege::CreateCatalog, Privilege::Owner]).await.unwrap();
-        assert!(allowed, "Admin with Owner on metastore must be allowed to create catalogs after restart");
+        let allowed = auth2
+            .authorize_any(
+                admin,
+                metastore,
+                &[Privilege::CreateCatalog, Privilege::Owner],
+            )
+            .await
+            .unwrap();
+        assert!(
+            allowed,
+            "Admin with Owner on metastore must be allowed to create catalogs after restart"
+        );
     }
 }

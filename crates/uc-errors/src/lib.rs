@@ -151,15 +151,24 @@ pub struct UcError {
 
 impl UcError {
     pub fn new(code: ErrorCode, message: impl Into<String>) -> Self {
-        Self { code, message: message.into() }
+        Self {
+            code,
+            message: message.into(),
+        }
     }
 
     pub fn not_found(entity: &str, name: &str) -> Self {
-        Self::new(ErrorCode::NotFound, format!("{} '{}' not found", entity, name))
+        Self::new(
+            ErrorCode::NotFound,
+            format!("{} '{}' not found", entity, name),
+        )
     }
 
     pub fn already_exists(entity: &str, name: &str) -> Self {
-        Self::new(ErrorCode::AlreadyExists, format!("{} '{}' already exists", entity, name))
+        Self::new(
+            ErrorCode::AlreadyExists,
+            format!("{} '{}' already exists", entity, name),
+        )
     }
 
     pub fn invalid_argument(msg: impl Into<String>) -> Self {
@@ -260,21 +269,39 @@ mod tests {
 
     #[test]
     fn uc_status_legacy_already_exists_is_400() {
-        assert_eq!(ErrorCode::CatalogAlreadyExists.uc_status(), StatusCode::BAD_REQUEST);
-        assert_eq!(ErrorCode::SchemaAlreadyExists.uc_status(), StatusCode::BAD_REQUEST);
-        assert_eq!(ErrorCode::TableAlreadyExists.uc_status(), StatusCode::BAD_REQUEST);
+        assert_eq!(
+            ErrorCode::CatalogAlreadyExists.uc_status(),
+            StatusCode::BAD_REQUEST
+        );
+        assert_eq!(
+            ErrorCode::SchemaAlreadyExists.uc_status(),
+            StatusCode::BAD_REQUEST
+        );
+        assert_eq!(
+            ErrorCode::TableAlreadyExists.uc_status(),
+            StatusCode::BAD_REQUEST
+        );
     }
 
     #[test]
     fn delta_status_legacy_already_exists_is_409() {
-        assert_eq!(ErrorCode::CatalogAlreadyExists.delta_status(), StatusCode::CONFLICT);
-        assert_eq!(ErrorCode::SchemaAlreadyExists.delta_status(), StatusCode::CONFLICT);
+        assert_eq!(
+            ErrorCode::CatalogAlreadyExists.delta_status(),
+            StatusCode::CONFLICT
+        );
+        assert_eq!(
+            ErrorCode::SchemaAlreadyExists.delta_status(),
+            StatusCode::CONFLICT
+        );
     }
 
     #[test]
     fn standard_already_exists_is_409_in_both() {
         assert_eq!(ErrorCode::AlreadyExists.uc_status(), StatusCode::CONFLICT);
-        assert_eq!(ErrorCode::AlreadyExists.delta_status(), StatusCode::CONFLICT);
+        assert_eq!(
+            ErrorCode::AlreadyExists.delta_status(),
+            StatusCode::CONFLICT
+        );
     }
 
     #[test]
@@ -310,15 +337,30 @@ mod tests {
     #[test]
     fn all_error_codes_have_uc_status() {
         let codes = [
-            ErrorCode::InvalidArgument, ErrorCode::UnsupportedTableFormat,
-            ErrorCode::NotFound, ErrorCode::CatalogNotFound, ErrorCode::SchemaNotFound,
-            ErrorCode::TableNotFound, ErrorCode::AlreadyExists, ErrorCode::PermissionDenied,
-            ErrorCode::Unauthenticated, ErrorCode::ResourceExhausted, ErrorCode::FailedPrecondition,
-            ErrorCode::Aborted, ErrorCode::CommitVersionConflict, ErrorCode::UpdateRequirementConflict,
-            ErrorCode::OutOfRange, ErrorCode::Unimplemented, ErrorCode::Internal, ErrorCode::DataLoss,
-            ErrorCode::ResourceAlreadyExists, ErrorCode::CatalogAlreadyExists,
-            ErrorCode::SchemaAlreadyExists, ErrorCode::TableAlreadyExists,
-            ErrorCode::StorageCredentialAlreadyExists, ErrorCode::ExternalLocationAlreadyExists,
+            ErrorCode::InvalidArgument,
+            ErrorCode::UnsupportedTableFormat,
+            ErrorCode::NotFound,
+            ErrorCode::CatalogNotFound,
+            ErrorCode::SchemaNotFound,
+            ErrorCode::TableNotFound,
+            ErrorCode::AlreadyExists,
+            ErrorCode::PermissionDenied,
+            ErrorCode::Unauthenticated,
+            ErrorCode::ResourceExhausted,
+            ErrorCode::FailedPrecondition,
+            ErrorCode::Aborted,
+            ErrorCode::CommitVersionConflict,
+            ErrorCode::UpdateRequirementConflict,
+            ErrorCode::OutOfRange,
+            ErrorCode::Unimplemented,
+            ErrorCode::Internal,
+            ErrorCode::DataLoss,
+            ErrorCode::ResourceAlreadyExists,
+            ErrorCode::CatalogAlreadyExists,
+            ErrorCode::SchemaAlreadyExists,
+            ErrorCode::TableAlreadyExists,
+            ErrorCode::StorageCredentialAlreadyExists,
+            ErrorCode::ExternalLocationAlreadyExists,
         ];
         for code in &codes {
             let status = code.uc_status();
@@ -328,7 +370,11 @@ mod tests {
 
     #[test]
     fn all_error_codes_have_as_str() {
-        let codes = [ErrorCode::InvalidArgument, ErrorCode::NotFound, ErrorCode::Internal];
+        let codes = [
+            ErrorCode::InvalidArgument,
+            ErrorCode::NotFound,
+            ErrorCode::Internal,
+        ];
         for code in &codes {
             assert!(!code.as_str().is_empty());
         }
@@ -336,8 +382,12 @@ mod tests {
 
     #[test]
     fn all_error_codes_have_delta_error_type() {
-        let codes = [ErrorCode::CommitVersionConflict, ErrorCode::UpdateRequirementConflict,
-                     ErrorCode::Unimplemented, ErrorCode::DataLoss];
+        let codes = [
+            ErrorCode::CommitVersionConflict,
+            ErrorCode::UpdateRequirementConflict,
+            ErrorCode::Unimplemented,
+            ErrorCode::DataLoss,
+        ];
         for code in &codes {
             assert!(!code.delta_error_type().is_empty());
         }
@@ -355,68 +405,136 @@ mod tests {
     #[test]
     fn all_error_codes_as_str_non_empty() {
         let codes = [
-            ErrorCode::InvalidArgument, ErrorCode::UnsupportedTableFormat,
-            ErrorCode::NotFound, ErrorCode::CatalogNotFound, ErrorCode::SchemaNotFound,
-            ErrorCode::TableNotFound, ErrorCode::AlreadyExists, ErrorCode::PermissionDenied,
-            ErrorCode::Unauthenticated, ErrorCode::ResourceExhausted, ErrorCode::FailedPrecondition,
-            ErrorCode::Aborted, ErrorCode::CommitVersionConflict, ErrorCode::UpdateRequirementConflict,
-            ErrorCode::OutOfRange, ErrorCode::Unimplemented, ErrorCode::Internal, ErrorCode::DataLoss,
-            ErrorCode::ResourceAlreadyExists, ErrorCode::CatalogAlreadyExists,
-            ErrorCode::SchemaAlreadyExists, ErrorCode::TableAlreadyExists,
-            ErrorCode::StorageCredentialAlreadyExists, ErrorCode::ExternalLocationAlreadyExists,
+            ErrorCode::InvalidArgument,
+            ErrorCode::UnsupportedTableFormat,
+            ErrorCode::NotFound,
+            ErrorCode::CatalogNotFound,
+            ErrorCode::SchemaNotFound,
+            ErrorCode::TableNotFound,
+            ErrorCode::AlreadyExists,
+            ErrorCode::PermissionDenied,
+            ErrorCode::Unauthenticated,
+            ErrorCode::ResourceExhausted,
+            ErrorCode::FailedPrecondition,
+            ErrorCode::Aborted,
+            ErrorCode::CommitVersionConflict,
+            ErrorCode::UpdateRequirementConflict,
+            ErrorCode::OutOfRange,
+            ErrorCode::Unimplemented,
+            ErrorCode::Internal,
+            ErrorCode::DataLoss,
+            ErrorCode::ResourceAlreadyExists,
+            ErrorCode::CatalogAlreadyExists,
+            ErrorCode::SchemaAlreadyExists,
+            ErrorCode::TableAlreadyExists,
+            ErrorCode::StorageCredentialAlreadyExists,
+            ErrorCode::ExternalLocationAlreadyExists,
         ];
         for code in &codes {
-            assert!(!code.as_str().is_empty(), "{:?}.as_str() must not be empty", code);
+            assert!(
+                !code.as_str().is_empty(),
+                "{:?}.as_str() must not be empty",
+                code
+            );
         }
         // Spot-check specific values to guard against typos
         assert_eq!(ErrorCode::InvalidArgument.as_str(), "INVALID_ARGUMENT");
         assert_eq!(ErrorCode::PermissionDenied.as_str(), "PERMISSION_DENIED");
-        assert_eq!(ErrorCode::CatalogAlreadyExists.as_str(), "CATALOG_ALREADY_EXISTS");
-        assert_eq!(ErrorCode::ExternalLocationAlreadyExists.as_str(), "EXTERNAL_LOCATION_ALREADY_EXISTS");
+        assert_eq!(
+            ErrorCode::CatalogAlreadyExists.as_str(),
+            "CATALOG_ALREADY_EXISTS"
+        );
+        assert_eq!(
+            ErrorCode::ExternalLocationAlreadyExists.as_str(),
+            "EXTERNAL_LOCATION_ALREADY_EXISTS"
+        );
     }
 
     #[test]
     fn all_error_codes_delta_error_type_non_empty() {
         let codes = [
-            ErrorCode::InvalidArgument, ErrorCode::UnsupportedTableFormat,
-            ErrorCode::NotFound, ErrorCode::CatalogNotFound, ErrorCode::SchemaNotFound,
-            ErrorCode::TableNotFound, ErrorCode::AlreadyExists, ErrorCode::PermissionDenied,
-            ErrorCode::Unauthenticated, ErrorCode::ResourceExhausted, ErrorCode::FailedPrecondition,
-            ErrorCode::Aborted, ErrorCode::CommitVersionConflict, ErrorCode::UpdateRequirementConflict,
-            ErrorCode::OutOfRange, ErrorCode::Unimplemented, ErrorCode::Internal, ErrorCode::DataLoss,
-            ErrorCode::ResourceAlreadyExists, ErrorCode::CatalogAlreadyExists,
-            ErrorCode::SchemaAlreadyExists, ErrorCode::TableAlreadyExists,
-            ErrorCode::StorageCredentialAlreadyExists, ErrorCode::ExternalLocationAlreadyExists,
+            ErrorCode::InvalidArgument,
+            ErrorCode::UnsupportedTableFormat,
+            ErrorCode::NotFound,
+            ErrorCode::CatalogNotFound,
+            ErrorCode::SchemaNotFound,
+            ErrorCode::TableNotFound,
+            ErrorCode::AlreadyExists,
+            ErrorCode::PermissionDenied,
+            ErrorCode::Unauthenticated,
+            ErrorCode::ResourceExhausted,
+            ErrorCode::FailedPrecondition,
+            ErrorCode::Aborted,
+            ErrorCode::CommitVersionConflict,
+            ErrorCode::UpdateRequirementConflict,
+            ErrorCode::OutOfRange,
+            ErrorCode::Unimplemented,
+            ErrorCode::Internal,
+            ErrorCode::DataLoss,
+            ErrorCode::ResourceAlreadyExists,
+            ErrorCode::CatalogAlreadyExists,
+            ErrorCode::SchemaAlreadyExists,
+            ErrorCode::TableAlreadyExists,
+            ErrorCode::StorageCredentialAlreadyExists,
+            ErrorCode::ExternalLocationAlreadyExists,
         ];
         for code in &codes {
-            assert!(!code.delta_error_type().is_empty(), "{:?}.delta_error_type() must not be empty", code);
+            assert!(
+                !code.delta_error_type().is_empty(),
+                "{:?}.delta_error_type() must not be empty",
+                code
+            );
         }
-        assert_eq!(ErrorCode::CommitVersionConflict.delta_error_type(), "CommitVersionConflictException");
-        assert_eq!(ErrorCode::UpdateRequirementConflict.delta_error_type(), "UpdateRequirementConflictException");
-        assert_eq!(ErrorCode::CatalogAlreadyExists.delta_error_type(), "AlreadyExistsException");
+        assert_eq!(
+            ErrorCode::CommitVersionConflict.delta_error_type(),
+            "CommitVersionConflictException"
+        );
+        assert_eq!(
+            ErrorCode::UpdateRequirementConflict.delta_error_type(),
+            "UpdateRequirementConflictException"
+        );
+        assert_eq!(
+            ErrorCode::CatalogAlreadyExists.delta_error_type(),
+            "AlreadyExistsException"
+        );
     }
 
     #[test]
     fn all_error_codes_delta_status_coverage() {
         // Non-AlreadyExists codes delegate to uc_status()
         let delegating = [
-            ErrorCode::NotFound, ErrorCode::PermissionDenied, ErrorCode::Unauthenticated,
-            ErrorCode::Internal, ErrorCode::Unimplemented, ErrorCode::Aborted,
+            ErrorCode::NotFound,
+            ErrorCode::PermissionDenied,
+            ErrorCode::Unauthenticated,
+            ErrorCode::Internal,
+            ErrorCode::Unimplemented,
+            ErrorCode::Aborted,
         ];
         for code in &delegating {
-            assert_eq!(code.delta_status(), code.uc_status(),
-                "{:?} should delegate delta_status to uc_status", code);
+            assert_eq!(
+                code.delta_status(),
+                code.uc_status(),
+                "{:?} should delegate delta_status to uc_status",
+                code
+            );
         }
         // AlreadyExists family returns 409 in delta format regardless
         let conflict_codes = [
-            ErrorCode::ResourceAlreadyExists, ErrorCode::CatalogAlreadyExists,
-            ErrorCode::SchemaAlreadyExists, ErrorCode::TableAlreadyExists,
-            ErrorCode::StorageCredentialAlreadyExists, ErrorCode::ExternalLocationAlreadyExists,
+            ErrorCode::ResourceAlreadyExists,
+            ErrorCode::CatalogAlreadyExists,
+            ErrorCode::SchemaAlreadyExists,
+            ErrorCode::TableAlreadyExists,
+            ErrorCode::StorageCredentialAlreadyExists,
+            ErrorCode::ExternalLocationAlreadyExists,
             ErrorCode::AlreadyExists,
         ];
         for code in &conflict_codes {
-            assert_eq!(code.delta_status(), axum::http::StatusCode::CONFLICT,
-                "{:?} should be 409 in delta format", code);
+            assert_eq!(
+                code.delta_status(),
+                axum::http::StatusCode::CONFLICT,
+                "{:?} should be 409 in delta format",
+                code
+            );
         }
     }
 

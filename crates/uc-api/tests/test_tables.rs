@@ -1,11 +1,16 @@
 mod common;
-use common::*;
 use axum::http::StatusCode;
+use common::*;
 use serde_json::json;
 
 async fn setup(app: &axum::Router) {
     post(app, &format!("{UC}/catalogs"), json!({"name":"tbl_cat"})).await;
-    post(app, &format!("{UC}/schemas"), json!({"name":"tbl_sch","catalog_name":"tbl_cat"})).await;
+    post(
+        app,
+        &format!("{UC}/schemas"),
+        json!({"name":"tbl_sch","catalog_name":"tbl_cat"}),
+    )
+    .await;
 }
 
 fn make_table(name: &str) -> serde_json::Value {
@@ -55,10 +60,18 @@ async fn table_list() {
     setup(&app).await;
     post(&app, &format!("{UC}/tables"), make_table("ta")).await;
     post(&app, &format!("{UC}/tables"), make_table("tb")).await;
-    let (s, body) = get(&app, &format!("{UC}/tables?catalog_name=tbl_cat&schema_name=tbl_sch")).await;
+    let (s, body) = get(
+        &app,
+        &format!("{UC}/tables?catalog_name=tbl_cat&schema_name=tbl_sch"),
+    )
+    .await;
     assert_eq!(s, StatusCode::OK);
-    let names: Vec<&str> = body["tables"].as_array().unwrap()
-        .iter().map(|t| t["name"].as_str().unwrap()).collect();
+    let names: Vec<&str> = body["tables"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|t| t["name"].as_str().unwrap())
+        .collect();
     assert!(names.contains(&"ta") && names.contains(&"tb"));
 }
 
@@ -79,7 +92,10 @@ async fn table_storage_location_normalized_to_file_uri() {
     setup(&app).await;
     let (_, body) = post(&app, &format!("{UC}/tables"), make_table("file_t")).await;
     let loc = body["storage_location"].as_str().unwrap();
-    assert!(loc.starts_with("file://"), "Expected file:// prefix, got: {loc}");
+    assert!(
+        loc.starts_with("file://"),
+        "Expected file:// prefix, got: {loc}"
+    );
 }
 
 #[tokio::test]
@@ -130,27 +146,41 @@ async fn managed_table_via_staging_flow() {
     setup(&app).await;
 
     // Create staging table
-    let (s, staging) = post(&app, &format!("{UC}/staging-tables"), json!({
-        "name": "staged_t",
-        "catalog_name": "tbl_cat",
-        "schema_name": "tbl_sch"
-    })).await;
+    let (s, staging) = post(
+        &app,
+        &format!("{UC}/staging-tables"),
+        json!({
+            "name": "staged_t",
+            "catalog_name": "tbl_cat",
+            "schema_name": "tbl_sch"
+        }),
+    )
+    .await;
     assert_eq!(s, StatusCode::OK);
     let staging_id = staging["table_id"].as_str().unwrap().to_string();
     let staging_loc = staging["staging_location"].as_str().unwrap().to_string();
 
     // Commit as MANAGED table
-    let (s, tbl) = post(&app, &format!("{UC}/tables"), json!({
-        "name": "staged_t",
-        "catalog_name": "tbl_cat",
-        "schema_name": "tbl_sch",
-        "table_type": "MANAGED",
-        "data_source_format": "DELTA",
-        "storage_location": staging_loc,
-        "columns": []
-    })).await;
+    let (s, tbl) = post(
+        &app,
+        &format!("{UC}/tables"),
+        json!({
+            "name": "staged_t",
+            "catalog_name": "tbl_cat",
+            "schema_name": "tbl_sch",
+            "table_type": "MANAGED",
+            "data_source_format": "DELTA",
+            "storage_location": staging_loc,
+            "columns": []
+        }),
+    )
+    .await;
     assert_eq!(s, StatusCode::OK);
-    assert_eq!(tbl["table_id"].as_str().unwrap(), staging_id, "Table ID must match staging UUID");
+    assert_eq!(
+        tbl["table_id"].as_str().unwrap(),
+        staging_id,
+        "Table ID must match staging UUID"
+    );
     assert_eq!(tbl["table_type"], "MANAGED");
 }
 
@@ -158,9 +188,14 @@ async fn managed_table_via_staging_flow() {
 async fn staging_commit_twice_returns_error() {
     let (app, _) = build_test_app().await;
     setup(&app).await;
-    let (_, staging) = post(&app, &format!("{UC}/staging-tables"), json!({
-        "name":"double_stage","catalog_name":"tbl_cat","schema_name":"tbl_sch"
-    })).await;
+    let (_, staging) = post(
+        &app,
+        &format!("{UC}/staging-tables"),
+        json!({
+            "name":"double_stage","catalog_name":"tbl_cat","schema_name":"tbl_sch"
+        }),
+    )
+    .await;
     let loc = staging["staging_location"].as_str().unwrap().to_string();
 
     let commit = json!({

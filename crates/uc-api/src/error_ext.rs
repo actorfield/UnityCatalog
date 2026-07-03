@@ -1,8 +1,4 @@
-use axum::{
-    extract::Request,
-    middleware::Next,
-    response::Response,
-};
+use axum::{extract::Request, middleware::Next, response::Response};
 use uc_errors::{error_into_response, ErrorFormat, UcError};
 
 /// Layer injected on each sub-router to tag requests with the error format.
