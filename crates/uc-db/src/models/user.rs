@@ -15,6 +15,9 @@ pub struct UserRow {
 
 impl UserRow {
     pub fn is_enabled(&self) -> bool {
-        self.state.as_deref().map(|s| s.eq_ignore_ascii_case("enabled")).unwrap_or(false)
+        self.state
+            .as_deref()
+            .map(|s| s.eq_ignore_ascii_case("enabled"))
+            .unwrap_or(false)
     }
 }

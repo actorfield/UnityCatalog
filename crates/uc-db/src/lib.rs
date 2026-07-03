@@ -1,14 +1,16 @@
-pub mod models;
-pub mod repos;
-pub mod pool;
 pub mod managed_storage;
+pub mod models;
+pub mod pool;
+pub mod repos;
 
 pub use pool::AnyPool;
 
 /// Convert a sqlx error to UcError.
 pub fn sqlx_err(e: sqlx::Error) -> uc_errors::UcError {
     match e {
-        sqlx::Error::RowNotFound => uc_errors::UcError::new(uc_errors::ErrorCode::NotFound, "Resource not found"),
+        sqlx::Error::RowNotFound => {
+            uc_errors::UcError::new(uc_errors::ErrorCode::NotFound, "Resource not found")
+        }
         other => uc_errors::UcError::new(uc_errors::ErrorCode::Internal, other.to_string()),
     }
 }

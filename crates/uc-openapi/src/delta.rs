@@ -108,11 +108,20 @@ pub struct DeltaCommit {
 pub struct DeltaUniformIcebergMetadata {
     #[serde(rename = "metadata-location", skip_serializing_if = "Option::is_none")]
     pub metadata_location: Option<String>,
-    #[serde(rename = "converted-delta-version", skip_serializing_if = "Option::is_none")]
+    #[serde(
+        rename = "converted-delta-version",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub converted_delta_version: Option<i64>,
-    #[serde(rename = "converted-delta-timestamp", skip_serializing_if = "Option::is_none")]
+    #[serde(
+        rename = "converted-delta-timestamp",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub converted_delta_timestamp: Option<i64>,
-    #[serde(rename = "base-converted-delta-version", skip_serializing_if = "Option::is_none")]
+    #[serde(
+        rename = "base-converted-delta-version",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub base_converted_delta_version: Option<i64>,
 }
 
@@ -166,9 +175,15 @@ pub struct DeltaTableMetadata {
     pub partition_columns: Option<Vec<String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub properties: Option<HashMap<String, String>>,
-    #[serde(rename = "last-commit-version", skip_serializing_if = "Option::is_none")]
+    #[serde(
+        rename = "last-commit-version",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub last_commit_version: Option<i64>,
-    #[serde(rename = "last-commit-timestamp-ms", skip_serializing_if = "Option::is_none")]
+    #[serde(
+        rename = "last-commit-timestamp-ms",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub last_commit_timestamp_ms: Option<i64>,
 }
 
@@ -179,7 +194,10 @@ pub struct DeltaLoadTableResponse {
     pub commits: Option<Vec<DeltaCommit>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub uniform: Option<DeltaUniformMetadata>,
-    #[serde(rename = "latest-table-version", skip_serializing_if = "Option::is_none")]
+    #[serde(
+        rename = "latest-table-version",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub latest_table_version: Option<i64>,
 }
 
@@ -200,7 +218,10 @@ pub struct DeltaCreateTableRequest {
     pub protocol: Option<DeltaProtocol>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub properties: Option<HashMap<String, String>>,
-    #[serde(rename = "last-commit-timestamp-ms", skip_serializing_if = "Option::is_none")]
+    #[serde(
+        rename = "last-commit-timestamp-ms",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub last_commit_timestamp_ms: Option<i64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub uniform: Option<DeltaUniformMetadata>,
@@ -221,15 +242,24 @@ pub struct DeltaStagingTableResponse {
     pub table_type: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub location: Option<String>,
-    #[serde(rename = "storage-credentials", skip_serializing_if = "Option::is_none")]
+    #[serde(
+        rename = "storage-credentials",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub storage_credentials: Option<Vec<DeltaStorageCredential>>,
     #[serde(rename = "required-protocol", skip_serializing_if = "Option::is_none")]
     pub required_protocol: Option<DeltaProtocol>,
     #[serde(rename = "suggested-protocol", skip_serializing_if = "Option::is_none")]
     pub suggested_protocol: Option<DeltaProtocol>,
-    #[serde(rename = "required-properties", skip_serializing_if = "Option::is_none")]
+    #[serde(
+        rename = "required-properties",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub required_properties: Option<HashMap<String, String>>,
-    #[serde(rename = "suggested-properties", skip_serializing_if = "Option::is_none")]
+    #[serde(
+        rename = "suggested-properties",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub suggested_properties: Option<HashMap<String, String>>,
 }
 
@@ -391,7 +421,10 @@ mod tests {
         let json = serde_json::to_string(&req).unwrap();
         assert!(json.contains(r#""type":"assert-table-uuid""#));
         let back: DeltaTableRequirement = serde_json::from_str(&json).unwrap();
-        assert!(matches!(back, DeltaTableRequirement::AssertTableUuid { .. }));
+        assert!(matches!(
+            back,
+            DeltaTableRequirement::AssertTableUuid { .. }
+        ));
     }
 
     #[test]
@@ -418,7 +451,8 @@ mod tests {
 
     #[test]
     fn delta_data_type_map_round_trip() {
-        let json = r#"{"type":"map","keyType":"string","valueType":"long","valueContainsNull":false}"#;
+        let json =
+            r#"{"type":"map","keyType":"string","valueType":"long","valueContainsNull":false}"#;
         let dt: DeltaDataType = serde_json::from_str(json).unwrap();
         assert!(matches!(dt, DeltaDataType::Map(_)));
     }

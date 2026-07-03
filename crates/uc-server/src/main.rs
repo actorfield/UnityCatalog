@@ -9,7 +9,7 @@ use uc_auth::{AllowingAuthorizer, JwkSet, JwtConfig, KeyManager, OidcConfig, UcA
 use uc_credentials::CloudCredentialVendor;
 use uc_db::{
     pool::run_migrations,
-    repos::{MetastoreRepo, UserRepo},
+    repos::{metastore, user},
     AnyPool,
 };
 use uuid::Uuid;
@@ -97,7 +97,7 @@ async fn bootstrap_operator_principal(
     external_ids: &[String],
 ) -> anyhow::Result<()> {
     for external_id in external_ids {
-        let user = UserRepo::find_or_create_by_external_id(pool, external_id)
+        let user = user::find_or_create_by_external_id(pool, external_id)
             .await
             .context("Failed to find_or_create operator principal")?;
 
@@ -170,7 +170,7 @@ async fn main() -> anyhow::Result<()> {
     info!("Database migrations applied");
 
     // ── 3. Metastore initialization ───────────────────────────────────────────
-    let metastore = MetastoreRepo::get_or_init(&pool, "unity-catalog")
+    let metastore = metastore::get_or_init(&pool, "unity-catalog")
         .await
         .context("Failed to initialize metastore")?;
     let metastore_id = metastore.id;
@@ -191,11 +191,11 @@ async fn main() -> anyhow::Result<()> {
     // ── 5. Admin user initialization ──────────────────────────────────────────
     let admin_email = "admin@unitycatalog.io";
     if !args.no_auth {
-        if UserRepo::get_by_email(&pool, admin_email).await?.is_none() {
+        if user::get_by_email(&pool, admin_email).await?.is_none() {
             // UUIDv7: time-ordered — encodes when this admin user was created
             let admin_id = Uuid::now_v7();
             let now = chrono::Utc::now().timestamp_millis();
-            UserRepo::create(
+            user::create(
                 &pool,
                 admin_id,
                 admin_email,

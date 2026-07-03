@@ -9,16 +9,43 @@ use uuid::Uuid;
 
 #[async_trait::async_trait]
 pub trait Authorizer: Send + Sync {
-    async fn authorize(&self, principal: Uuid, resource: Uuid, privilege: Privilege) -> Result<bool, UcError>;
-    async fn authorize_any(&self, principal: Uuid, resource: Uuid, privileges: &[Privilege]) -> Result<bool, UcError>;
-    async fn grant(&self, principal: Uuid, resource: Uuid, privilege: Privilege) -> Result<(), UcError>;
-    async fn revoke(&self, principal: Uuid, resource: Uuid, privilege: Privilege) -> Result<(), UcError>;
+    async fn authorize(
+        &self,
+        principal: Uuid,
+        resource: Uuid,
+        privilege: Privilege,
+    ) -> Result<bool, UcError>;
+    async fn authorize_any(
+        &self,
+        principal: Uuid,
+        resource: Uuid,
+        privileges: &[Privilege],
+    ) -> Result<bool, UcError>;
+    async fn grant(
+        &self,
+        principal: Uuid,
+        resource: Uuid,
+        privilege: Privilege,
+    ) -> Result<(), UcError>;
+    async fn revoke(
+        &self,
+        principal: Uuid,
+        resource: Uuid,
+        privilege: Privilege,
+    ) -> Result<(), UcError>;
     async fn add_hierarchy_child(&self, parent: Uuid, child: Uuid) -> Result<(), UcError>;
     async fn remove_hierarchy_children(&self, resource: Uuid) -> Result<(), UcError>;
     /// List all privileges a principal has on a specific resource.
-    async fn list_privileges(&self, principal: Uuid, resource: Uuid) -> Result<Vec<Privilege>, UcError>;
+    async fn list_privileges(
+        &self,
+        principal: Uuid,
+        resource: Uuid,
+    ) -> Result<Vec<Privilege>, UcError>;
     /// List all (principal, privileges) pairs for a resource.
-    async fn list_grants_on_resource(&self, resource: Uuid) -> Result<Vec<(Uuid, Vec<Privilege>)>, UcError>;
+    async fn list_grants_on_resource(
+        &self,
+        resource: Uuid,
+    ) -> Result<Vec<(Uuid, Vec<Privilege>)>, UcError>;
 }
 
 // ── UcAuthorizer (JCasbin-backed) ─────────────────────────────────────────────
@@ -35,40 +62,59 @@ impl UcAuthorizer {
     pub async fn new_in_memory() -> Result<Self, UcError> {
         use casbin::{DefaultModel, MemoryAdapter};
 
-        let model = DefaultModel::from_str(Self::MODEL)
-            .await
-            .map_err(|e| UcError::new(ErrorCode::Internal, format!("Casbin model load failed: {}", e)))?;
+        let model = DefaultModel::from_str(Self::MODEL).await.map_err(|e| {
+            UcError::new(
+                ErrorCode::Internal,
+                format!("Casbin model load failed: {}", e),
+            )
+        })?;
 
         let adapter = MemoryAdapter::default();
 
-        let mut enforcer = Enforcer::new(model, adapter)
-            .await
-            .map_err(|e| UcError::new(ErrorCode::Internal, format!("Casbin enforcer init failed: {}", e)))?;
+        let mut enforcer = Enforcer::new(model, adapter).await.map_err(|e| {
+            UcError::new(
+                ErrorCode::Internal,
+                format!("Casbin enforcer init failed: {}", e),
+            )
+        })?;
         Self::seed_privilege_hierarchy(&mut enforcer).await?;
 
-        Ok(Self { enforcer: Arc::new(RwLock::new(enforcer)) })
+        Ok(Self {
+            enforcer: Arc::new(RwLock::new(enforcer)),
+        })
     }
 
     /// Initialize with a DB-backed adapter so policies survive restarts.
     /// Loads existing policies from `casbin_rule` table on startup.
     pub async fn new_with_db(pool: uc_db::AnyPool) -> Result<Self, UcError> {
-        use casbin::DefaultModel;
         use crate::db_adapter::SqlxAdapter;
+        use casbin::DefaultModel;
 
-        let model = DefaultModel::from_str(Self::MODEL)
-            .await
-            .map_err(|e| UcError::new(ErrorCode::Internal, format!("Casbin model load failed: {}", e)))?;
+        let model = DefaultModel::from_str(Self::MODEL).await.map_err(|e| {
+            UcError::new(
+                ErrorCode::Internal,
+                format!("Casbin model load failed: {}", e),
+            )
+        })?;
 
-        let adapter = SqlxAdapter::new(pool)
-            .await
-            .map_err(|e| UcError::new(ErrorCode::Internal, format!("Casbin DB adapter init failed: {}", e)))?;
+        let adapter = SqlxAdapter::new(pool).await.map_err(|e| {
+            UcError::new(
+                ErrorCode::Internal,
+                format!("Casbin DB adapter init failed: {}", e),
+            )
+        })?;
 
-        let mut enforcer = Enforcer::new(model, adapter)
-            .await
-            .map_err(|e| UcError::new(ErrorCode::Internal, format!("Casbin enforcer init failed: {}", e)))?;
+        let mut enforcer = Enforcer::new(model, adapter).await.map_err(|e| {
+            UcError::new(
+                ErrorCode::Internal,
+                format!("Casbin enforcer init failed: {}", e),
+            )
+        })?;
         Self::seed_privilege_hierarchy(&mut enforcer).await?;
 
-        Ok(Self { enforcer: Arc::new(RwLock::new(enforcer)) })
+        Ok(Self {
+            enforcer: Arc::new(RwLock::new(enforcer)),
+        })
     }
 
     /// Seed the `g3` privilege-implication grouping (OWNER -> ALL_PRIVILEGES ->
@@ -80,7 +126,9 @@ impl UcAuthorizer {
             enforcer
                 .add_named_grouping_policy("g3", vec![parent.to_string(), child.to_string()])
                 .await
-                .map_err(|e| UcError::new(ErrorCode::Internal, format!("Casbin seed g3 failed: {}", e)))?;
+                .map_err(|e| {
+                    UcError::new(ErrorCode::Internal, format!("Casbin seed g3 failed: {}", e))
+                })?;
         }
         Ok(())
     }
@@ -94,14 +142,28 @@ impl UcAuthorizer {
 
 #[async_trait::async_trait]
 impl Authorizer for UcAuthorizer {
-    async fn authorize(&self, principal: Uuid, resource: Uuid, privilege: Privilege) -> Result<bool, UcError> {
+    async fn authorize(
+        &self,
+        principal: Uuid,
+        resource: Uuid,
+        privilege: Privilege,
+    ) -> Result<bool, UcError> {
         let enforcer = self.enforcer.read().await;
         enforcer
-            .enforce((principal.to_string(), resource.to_string(), privilege.as_casbin_str()))
+            .enforce((
+                principal.to_string(),
+                resource.to_string(),
+                privilege.as_casbin_str(),
+            ))
             .map_err(|e| UcError::new(ErrorCode::Internal, format!("Casbin enforce failed: {}", e)))
     }
 
-    async fn authorize_any(&self, principal: Uuid, resource: Uuid, privileges: &[Privilege]) -> Result<bool, UcError> {
+    async fn authorize_any(
+        &self,
+        principal: Uuid,
+        resource: Uuid,
+        privileges: &[Privilege],
+    ) -> Result<bool, UcError> {
         for p in privileges {
             if self.authorize(principal, resource, p.clone()).await? {
                 return Ok(true);
@@ -110,7 +172,12 @@ impl Authorizer for UcAuthorizer {
         Ok(false)
     }
 
-    async fn grant(&self, principal: Uuid, resource: Uuid, privilege: Privilege) -> Result<(), UcError> {
+    async fn grant(
+        &self,
+        principal: Uuid,
+        resource: Uuid,
+        privilege: Privilege,
+    ) -> Result<(), UcError> {
         let mut enforcer = self.enforcer.write().await;
         enforcer
             .add_policy(vec![
@@ -119,11 +186,21 @@ impl Authorizer for UcAuthorizer {
                 privilege.as_casbin_str().to_string(),
             ])
             .await
-            .map_err(|e| UcError::new(ErrorCode::Internal, format!("Casbin add_policy failed: {}", e)))?;
+            .map_err(|e| {
+                UcError::new(
+                    ErrorCode::Internal,
+                    format!("Casbin add_policy failed: {}", e),
+                )
+            })?;
         Ok(())
     }
 
-    async fn revoke(&self, principal: Uuid, resource: Uuid, privilege: Privilege) -> Result<(), UcError> {
+    async fn revoke(
+        &self,
+        principal: Uuid,
+        resource: Uuid,
+        privilege: Privilege,
+    ) -> Result<(), UcError> {
         let mut enforcer = self.enforcer.write().await;
         enforcer
             .remove_policy(vec![
@@ -132,7 +209,12 @@ impl Authorizer for UcAuthorizer {
                 privilege.as_casbin_str().to_string(),
             ])
             .await
-            .map_err(|e| UcError::new(ErrorCode::Internal, format!("Casbin remove_policy failed: {}", e)))?;
+            .map_err(|e| {
+                UcError::new(
+                    ErrorCode::Internal,
+                    format!("Casbin remove_policy failed: {}", e),
+                )
+            })?;
         Ok(())
     }
 
@@ -142,7 +224,12 @@ impl Authorizer for UcAuthorizer {
         enforcer
             .add_named_grouping_policy("g2", vec![child.to_string(), parent.to_string()])
             .await
-            .map_err(|e| UcError::new(ErrorCode::Internal, format!("Casbin hierarchy failed: {}", e)))?;
+            .map_err(|e| {
+                UcError::new(
+                    ErrorCode::Internal,
+                    format!("Casbin hierarchy failed: {}", e),
+                )
+            })?;
         Ok(())
     }
 
@@ -151,26 +238,47 @@ impl Authorizer for UcAuthorizer {
         enforcer
             .remove_named_grouping_policy("g2", vec![resource.to_string(), "".to_string()])
             .await
-            .map_err(|e| UcError::new(ErrorCode::Internal, format!("Casbin remove hierarchy failed: {}", e)))?;
+            .map_err(|e| {
+                UcError::new(
+                    ErrorCode::Internal,
+                    format!("Casbin remove hierarchy failed: {}", e),
+                )
+            })?;
         Ok(())
     }
 
-    async fn list_privileges(&self, principal: Uuid, resource: Uuid) -> Result<Vec<Privilege>, UcError> {
+    async fn list_privileges(
+        &self,
+        principal: Uuid,
+        resource: Uuid,
+    ) -> Result<Vec<Privilege>, UcError> {
         let enforcer = self.enforcer.read().await;
         let policies = enforcer.get_policy();
-        let privs = policies.iter()
-            .filter(|p| p.len() >= 3 && p[0] == principal.to_string() && p[1] == resource.to_string())
+        let privs = policies
+            .iter()
+            .filter(|p| {
+                p.len() >= 3 && p[0] == principal.to_string() && p[1] == resource.to_string()
+            })
             .filter_map(|p| Privilege::from_casbin_str(&p[2]))
             .collect();
         Ok(privs)
     }
 
-    async fn list_grants_on_resource(&self, resource: Uuid) -> Result<Vec<(Uuid, Vec<Privilege>)>, UcError> {
+    async fn list_grants_on_resource(
+        &self,
+        resource: Uuid,
+    ) -> Result<Vec<(Uuid, Vec<Privilege>)>, UcError> {
         let enforcer = self.enforcer.read().await;
         let policies = enforcer.get_policy();
-        let mut map: std::collections::HashMap<Uuid, Vec<Privilege>> = std::collections::HashMap::new();
-        for p in policies.iter().filter(|p| p.len() >= 3 && p[1] == resource.to_string()) {
-            if let (Ok(principal), Some(p_priv)) = (p[0].parse::<Uuid>(), Privilege::from_casbin_str(&p[2])) {
+        let mut map: std::collections::HashMap<Uuid, Vec<Privilege>> =
+            std::collections::HashMap::new();
+        for p in policies
+            .iter()
+            .filter(|p| p.len() >= 3 && p[1] == resource.to_string())
+        {
+            if let (Ok(principal), Some(p_priv)) =
+                (p[0].parse::<Uuid>(), Privilege::from_casbin_str(&p[2]))
+            {
                 map.entry(principal).or_default().push(p_priv);
             }
         }
@@ -184,15 +292,39 @@ pub struct AllowingAuthorizer;
 
 #[async_trait::async_trait]
 impl Authorizer for AllowingAuthorizer {
-    async fn authorize(&self, _p: Uuid, _r: Uuid, _priv: Privilege) -> Result<bool, UcError> { Ok(true) }
-    async fn authorize_any(&self, _p: Uuid, _r: Uuid, _privs: &[Privilege]) -> Result<bool, UcError> { Ok(true) }
-    async fn grant(&self, _p: Uuid, _r: Uuid, _priv: Privilege) -> Result<(), UcError> { Ok(()) }
-    async fn revoke(&self, _p: Uuid, _r: Uuid, _priv: Privilege) -> Result<(), UcError> { Ok(()) }
-    async fn add_hierarchy_child(&self, _parent: Uuid, _child: Uuid) -> Result<(), UcError> { Ok(()) }
-    async fn remove_hierarchy_children(&self, _r: Uuid) -> Result<(), UcError> { Ok(()) }
+    async fn authorize(&self, _p: Uuid, _r: Uuid, _priv: Privilege) -> Result<bool, UcError> {
+        Ok(true)
+    }
+    async fn authorize_any(
+        &self,
+        _p: Uuid,
+        _r: Uuid,
+        _privs: &[Privilege],
+    ) -> Result<bool, UcError> {
+        Ok(true)
+    }
+    async fn grant(&self, _p: Uuid, _r: Uuid, _priv: Privilege) -> Result<(), UcError> {
+        Ok(())
+    }
+    async fn revoke(&self, _p: Uuid, _r: Uuid, _priv: Privilege) -> Result<(), UcError> {
+        Ok(())
+    }
+    async fn add_hierarchy_child(&self, _parent: Uuid, _child: Uuid) -> Result<(), UcError> {
+        Ok(())
+    }
+    async fn remove_hierarchy_children(&self, _r: Uuid) -> Result<(), UcError> {
+        Ok(())
+    }
     // No-auth mode has no policy data — return empty rather than fabricating OWNER grants
-    async fn list_privileges(&self, _p: Uuid, _r: Uuid) -> Result<Vec<Privilege>, UcError> { Ok(vec![]) }
-    async fn list_grants_on_resource(&self, _r: Uuid) -> Result<Vec<(Uuid, Vec<Privilege>)>, UcError> { Ok(vec![]) }
+    async fn list_privileges(&self, _p: Uuid, _r: Uuid) -> Result<Vec<Privilege>, UcError> {
+        Ok(vec![])
+    }
+    async fn list_grants_on_resource(
+        &self,
+        _r: Uuid,
+    ) -> Result<Vec<(Uuid, Vec<Privilege>)>, UcError> {
+        Ok(vec![])
+    }
 }
 
 #[cfg(test)]
@@ -207,7 +339,10 @@ mod tests {
         let p = Uuid::new_v4();
         let r = Uuid::new_v4();
         assert!(auth.authorize(p, r, Privilege::Owner).await.unwrap());
-        assert!(auth.authorize_any(p, r, &[Privilege::Select, Privilege::Modify]).await.unwrap());
+        assert!(auth
+            .authorize_any(p, r, &[Privilege::Select, Privilege::Modify])
+            .await
+            .unwrap());
     }
 
     #[tokio::test]
@@ -235,7 +370,10 @@ mod tests {
         let p = Uuid::new_v4();
         let r = Uuid::new_v4();
         let privs = auth.list_privileges(p, r).await.unwrap();
-        assert!(privs.is_empty(), "no-auth mode should return empty privilege list");
+        assert!(
+            privs.is_empty(),
+            "no-auth mode should return empty privilege list"
+        );
         let grants = auth.list_grants_on_resource(r).await.unwrap();
         assert!(grants.is_empty());
     }
@@ -251,7 +389,9 @@ mod tests {
         auth.init_admin(admin, metastore).await.unwrap();
 
         assert!(
-            auth.authorize(admin, metastore, Privilege::Owner).await.unwrap(),
+            auth.authorize(admin, metastore, Privilege::Owner)
+                .await
+                .unwrap(),
             "init_admin must grant Owner privilege on the metastore"
         );
     }
@@ -264,8 +404,14 @@ mod tests {
         auth.init_admin(admin, metastore).await.unwrap();
 
         // Owner implies CreateCatalog in the casbin model
-        let allowed = auth.authorize_any(admin, metastore, &[Privilege::CreateCatalog, Privilege::Owner])
-            .await.unwrap();
+        let allowed = auth
+            .authorize_any(
+                admin,
+                metastore,
+                &[Privilege::CreateCatalog, Privilege::Owner],
+            )
+            .await
+            .unwrap();
         assert!(allowed);
     }
 
@@ -278,14 +424,25 @@ mod tests {
         let resource = Uuid::new_v4();
 
         // Initially not authorised
-        assert!(!auth.authorize(principal, resource, Privilege::Select).await.unwrap());
+        assert!(!auth
+            .authorize(principal, resource, Privilege::Select)
+            .await
+            .unwrap());
 
         // Grant then check
-        auth.grant(principal, resource, Privilege::Select).await.unwrap();
-        assert!(auth.authorize(principal, resource, Privilege::Select).await.unwrap());
+        auth.grant(principal, resource, Privilege::Select)
+            .await
+            .unwrap();
+        assert!(auth
+            .authorize(principal, resource, Privilege::Select)
+            .await
+            .unwrap());
 
         // Different privilege still not granted
-        assert!(!auth.authorize(principal, resource, Privilege::Modify).await.unwrap());
+        assert!(!auth
+            .authorize(principal, resource, Privilege::Modify)
+            .await
+            .unwrap());
     }
 
     #[tokio::test]
@@ -306,9 +463,15 @@ mod tests {
         let r = Uuid::new_v4();
         auth.grant(p, r, Privilege::Select).await.unwrap();
         // authorize_any with Select in list → true
-        assert!(auth.authorize_any(p, r, &[Privilege::Select, Privilege::Modify]).await.unwrap());
+        assert!(auth
+            .authorize_any(p, r, &[Privilege::Select, Privilege::Modify])
+            .await
+            .unwrap());
         // authorize_any with only Modify → false
-        assert!(!auth.authorize_any(p, r, &[Privilege::Modify]).await.unwrap());
+        assert!(!auth
+            .authorize_any(p, r, &[Privilege::Modify])
+            .await
+            .unwrap());
     }
 
     #[tokio::test]
@@ -355,12 +518,17 @@ mod tests {
         let r = Uuid::new_v4();
         auth.grant(p, r, Privilege::Owner).await.unwrap();
         for req in [
-            Privilege::Select, Privilege::Modify, Privilege::ReadVolume,
-            Privilege::WriteFiles, Privilege::UseSchema, Privilege::CreateTable,
+            Privilege::Select,
+            Privilege::Modify,
+            Privilege::ReadVolume,
+            Privilege::WriteFiles,
+            Privilege::UseSchema,
+            Privilege::CreateTable,
         ] {
             assert!(
                 auth.authorize(p, r, req.clone()).await.unwrap(),
-                "OWNER must imply {:?}", req
+                "OWNER must imply {:?}",
+                req
             );
         }
     }
@@ -401,9 +569,18 @@ mod tests {
         auth.add_hierarchy_child(schema, table).await.unwrap();
         auth.grant(user, catalog, Privilege::Owner).await.unwrap();
         // OWNER on the catalog cascades to schema + table, implying specifics.
-        assert!(auth.authorize(user, schema, Privilege::Owner).await.unwrap());
-        assert!(auth.authorize(user, table, Privilege::Select).await.unwrap());
-        assert!(auth.authorize(user, table, Privilege::Modify).await.unwrap());
+        assert!(auth
+            .authorize(user, schema, Privilege::Owner)
+            .await
+            .unwrap());
+        assert!(auth
+            .authorize(user, table, Privilege::Select)
+            .await
+            .unwrap());
+        assert!(auth
+            .authorize(user, table, Privilege::Modify)
+            .await
+            .unwrap());
     }
 
     #[tokio::test]
@@ -415,11 +592,17 @@ mod tests {
         // SELECT on the schema covers the child table (downward inheritance).
         let owner = Uuid::new_v4();
         auth.grant(owner, schema, Privilege::Select).await.unwrap();
-        assert!(auth.authorize(owner, table, Privilege::Select).await.unwrap());
+        assert!(auth
+            .authorize(owner, table, Privilege::Select)
+            .await
+            .unwrap());
         // A grant on the child must NOT leak upward to the parent.
         let other = Uuid::new_v4();
         auth.grant(other, table, Privilege::Select).await.unwrap();
-        assert!(!auth.authorize(other, schema, Privilege::Select).await.unwrap());
+        assert!(!auth
+            .authorize(other, schema, Privilege::Select)
+            .await
+            .unwrap());
     }
 
     // ── ABAC capability ───────────────────────────────────────────────────────
@@ -447,7 +630,9 @@ e = some(where (p.eft == allow))
 m = r.sub == r.obj.owner
 ";
         let model = DefaultModel::from_str(abac).await.unwrap();
-        let enforcer = Enforcer::new(model, MemoryAdapter::default()).await.unwrap();
+        let enforcer = Enforcer::new(model, MemoryAdapter::default())
+            .await
+            .unwrap();
 
         #[derive(Serialize, Hash)]
         struct Resource<'a> {
@@ -455,7 +640,11 @@ m = r.sub == r.obj.owner
         }
 
         // Attribute match: caller == resource.owner -> allowed; else denied.
-        assert!(enforcer.enforce(("alice", Resource { owner: "alice" })).unwrap());
-        assert!(!enforcer.enforce(("alice", Resource { owner: "bob" })).unwrap());
+        assert!(enforcer
+            .enforce(("alice", Resource { owner: "alice" }))
+            .unwrap());
+        assert!(!enforcer
+            .enforce(("alice", Resource { owner: "bob" }))
+            .unwrap());
     }
 }

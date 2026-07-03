@@ -5,7 +5,7 @@ use axum::{
 };
 use std::sync::Arc;
 use uc_auth::{decode_oidc_sub, jwt::decode_token, UcClaims};
-use uc_db::repos::UserRepo;
+use uc_db::repos::user;
 use uc_errors::{error_into_response, ErrorFormat, UcError};
 use uc_types::TokenType;
 
@@ -65,9 +65,11 @@ pub async fn auth_middleware(
             // own (lazily-created, zero-grant) uc_users row.
             if let Some(oidc) = &state.oidc_config {
                 match decode_oidc_sub(oidc, &token) {
-                    Ok(sub) => match UserRepo::find_or_create_by_external_id(&state.pool, &sub).await {
+                    Ok(sub) => match user::find_or_create_by_external_id(&state.pool, &sub).await {
                         Ok(row) => UcClaims {
-                            sub: row.email.unwrap_or_else(|| row.external_id.clone().unwrap_or(sub)),
+                            sub: row
+                                .email
+                                .unwrap_or_else(|| row.external_id.clone().unwrap_or(sub)),
                             iss: oidc.issuer.clone(),
                             iat: chrono::Utc::now().timestamp(),
                             jti: uuid::Uuid::now_v7().to_string(),
@@ -85,7 +87,7 @@ pub async fn auth_middleware(
 
     // SERVICE tokens bypass user DB lookup — they represent the server itself
     if claims.token_type != uc_types::TokenType::Service {
-        match UserRepo::get_by_email(&state.pool, &claims.sub).await {
+        match user::get_by_email(&state.pool, &claims.sub).await {
             Ok(Some(user)) if user.is_enabled() => {}
             Ok(Some(_)) => {
                 let err = UcError::unauthenticated("User account is disabled");

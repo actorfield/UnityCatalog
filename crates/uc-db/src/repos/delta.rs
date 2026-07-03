@@ -2,11 +2,8 @@ use crate::{models::delta::DeltaCommitRow, pool::AnyPool};
 use uc_errors::UcError;
 use uuid::Uuid;
 
-pub struct DeltaCommitRepo;
-
-impl DeltaCommitRepo {
-    pub async fn insert(pool: &AnyPool, row: &DeltaCommitRow) -> Result<DeltaCommitRow, UcError> {
-        sqlx::query_as::<_, DeltaCommitRow>(
+pub async fn insert(pool: &AnyPool, row: &DeltaCommitRow) -> Result<DeltaCommitRow, UcError> {
+    sqlx::query_as::<_, DeltaCommitRow>(
             "INSERT INTO uc_delta_commits (id, table_id, commit_version, commit_filename, commit_filesize,
               commit_file_modification_timestamp, commit_timestamp, is_backfilled_latest_commit)
              VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING *",
@@ -26,30 +23,37 @@ impl DeltaCommitRepo {
             }
             other => crate::sqlx_err(other),
         })
-    }
+}
 
-    pub async fn list_for_table(
-        pool: &AnyPool, table_id: Uuid,
-        starting_version: Option<i64>, ending_version: Option<i64>,
-    ) -> Result<Vec<DeltaCommitRow>, UcError> {
-        // not compile-time checked — dynamic range filter
-        let rows: Vec<DeltaCommitRow> = sqlx::query_as::<_, DeltaCommitRow>(
-            "SELECT * FROM uc_delta_commits
+pub async fn list_for_table(
+    pool: &AnyPool,
+    table_id: Uuid,
+    starting_version: Option<i64>,
+    ending_version: Option<i64>,
+) -> Result<Vec<DeltaCommitRow>, UcError> {
+    // not compile-time checked — dynamic range filter
+    let rows: Vec<DeltaCommitRow> = sqlx::query_as::<_, DeltaCommitRow>(
+        "SELECT * FROM uc_delta_commits
              WHERE table_id=$1
                AND ($2 IS NULL OR commit_version >= $2)
                AND ($3 IS NULL OR commit_version <= $3)
              ORDER BY commit_version",
-        )
-        .bind(table_id).bind(starting_version).bind(ending_version)
-        .fetch_all(pool).await.map_err(crate::sqlx_err)?;
-        Ok(rows)
-    }
+    )
+    .bind(table_id)
+    .bind(starting_version)
+    .bind(ending_version)
+    .fetch_all(pool)
+    .await
+    .map_err(crate::sqlx_err)?;
+    Ok(rows)
+}
 
-    pub async fn latest_version(pool: &AnyPool, table_id: Uuid) -> Result<Option<i64>, UcError> {
-        let row: Option<(i64,)> = sqlx::query_as(
-            "SELECT MAX(commit_version) FROM uc_delta_commits WHERE table_id=$1",
-        )
-        .bind(table_id).fetch_optional(pool).await.map_err(crate::sqlx_err)?;
-        Ok(row.map(|(v,)| v))
-    }
+pub async fn latest_version(pool: &AnyPool, table_id: Uuid) -> Result<Option<i64>, UcError> {
+    let row: Option<(i64,)> =
+        sqlx::query_as("SELECT MAX(commit_version) FROM uc_delta_commits WHERE table_id=$1")
+            .bind(table_id)
+            .fetch_optional(pool)
+            .await
+            .map_err(crate::sqlx_err)?;
+    Ok(row.map(|(v,)| v))
 }

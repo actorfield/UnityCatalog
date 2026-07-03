@@ -1,9 +1,9 @@
+use crate::state::AppState;
 use axum::{extract::State, http::StatusCode, Json};
 use uc_auth::jwt::{encode_token, UcClaims};
-use uc_db::repos::UserRepo;
+use uc_db::repos::user;
 use uc_errors::{ErrorCode, UcError};
 use uc_openapi::control::OAuthTokenExchangeResponse;
-use crate::state::AppState;
 
 #[derive(serde::Deserialize)]
 pub struct TokenForm {
@@ -18,10 +18,15 @@ pub async fn token_exchange(
 ) -> Result<Json<OAuthTokenExchangeResponse>, UcError> {
     let gt = form.grant_type.as_deref().unwrap_or("");
     if gt != "urn:ietf:params:oauth:grant-type:token-exchange" {
-        return Err(UcError::new(ErrorCode::InvalidArgument, format!("Unsupported grant_type: {}", gt)));
+        return Err(UcError::new(
+            ErrorCode::InvalidArgument,
+            format!("Unsupported grant_type: {}", gt),
+        ));
     }
 
-    let subject_token = form.subject_token.as_deref()
+    let subject_token = form
+        .subject_token
+        .as_deref()
         .ok_or_else(|| UcError::new(ErrorCode::InvalidArgument, "subject_token required"))?;
 
     // When auth is disabled, issue a token for the subject directly (no DB lookup required)
@@ -30,12 +35,13 @@ pub async fn token_exchange(
     } else {
         // Auth enabled: look up the user in the DB (email, then external_id for
         // OIDC-mapped principals, which have no email)
-        let found = match UserRepo::get_by_email(&state.pool, subject_token).await? {
+        let found = match user::get_by_email(&state.pool, subject_token).await? {
             Some(u) => Some(u),
-            None => UserRepo::get_by_external_id(&state.pool, subject_token).await?,
+            None => user::get_by_external_id(&state.pool, subject_token).await?,
         };
-        let user = found
-            .ok_or_else(|| UcError::unauthenticated(format!("User '{}' not found", subject_token)))?;
+        let user = found.ok_or_else(|| {
+            UcError::unauthenticated(format!("User '{}' not found", subject_token))
+        })?;
         if !user.is_enabled() {
             return Err(UcError::unauthenticated("User account is disabled"));
         }
@@ -60,6 +66,10 @@ pub async fn logout(State(_state): State<AppState>) -> StatusCode {
 
 pub async fn jwks(State(state): State<AppState>) -> Result<String, UcError> {
     let path = state.config_dir.join("certs.json");
-    std::fs::read_to_string(&path)
-        .map_err(|e| UcError::new(ErrorCode::Internal, format!("JWKS not found at {}: {}", path.display(), e)))
+    std::fs::read_to_string(&path).map_err(|e| {
+        UcError::new(
+            ErrorCode::Internal,
+            format!("JWKS not found at {}: {}", path.display(), e),
+        )
+    })
 }

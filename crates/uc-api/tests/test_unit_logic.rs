@@ -1,6 +1,5 @@
 /// Unit tests for pure logic functions in uc-api (no DB, no HTTP).
 /// Tests helpers.rs: split2, split3, validate_sql_name, now_ms
-
 use uc_api::catalog_api::helpers::*;
 
 // ── split2 ────────────────────────────────────────────────────────────────────
@@ -66,7 +65,14 @@ fn split3_no_dots_errors() {
 
 #[test]
 fn valid_names_accepted() {
-    for name in ["catalog", "my_schema", "Table123", "a", "CamelCase", "with-dash"] {
+    for name in [
+        "catalog",
+        "my_schema",
+        "Table123",
+        "a",
+        "CamelCase",
+        "with-dash",
+    ] {
         assert!(validate_sql_name(name).is_ok(), "Expected valid: {name}");
     }
 }

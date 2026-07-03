@@ -13,7 +13,7 @@ use uuid::Uuid;
 use crate::{
     models::{catalog::CatalogRow, schema::SchemaRow},
     pool::AnyPool,
-    repos::{CatalogRepo, SchemaRepo},
+    repos::{catalog, schema},
 };
 
 /// Resolve the managed storage root for a schema, walking up to catalog if needed.
@@ -23,8 +23,8 @@ pub async fn resolve_storage_root(
     catalog_name: &str,
     schema_name: &str,
 ) -> Result<String, UcError> {
-    let schema = SchemaRepo::get_by_full_name(pool, catalog_name, schema_name).await?;
-    let catalog = CatalogRepo::get_by_name(pool, catalog_name).await?;
+    let schema = schema::get_by_full_name(pool, catalog_name, schema_name).await?;
+    let catalog = catalog::get_by_name(pool, catalog_name).await?;
     resolve_from_rows(&catalog, &schema)
 }
 
@@ -84,7 +84,11 @@ pub fn managed_model_location(storage_root: &str, schema_id: Uuid, model_id: Uui
 
 /// Derive the storage location for a model version.
 pub fn managed_model_version_location(model_location: &str, version: i32) -> String {
-    format!("{}/versions/{}", model_location.trim_end_matches('/'), version)
+    format!(
+        "{}/versions/{}",
+        model_location.trim_end_matches('/'),
+        version
+    )
 }
 
 /// Derive the staging location for a staging table.
@@ -104,18 +108,32 @@ mod tests {
 
     fn fake_catalog(storage_root: Option<&str>) -> CatalogRow {
         CatalogRow {
-            id: Uuid::new_v4(), name: "cat".into(), comment: None, owner: None,
-            created_at: 0, created_by: None, updated_at: None, updated_by: None,
-            storage_root: storage_root.map(String::from), storage_location: None,
+            id: Uuid::new_v4(),
+            name: "cat".into(),
+            comment: None,
+            owner: None,
+            created_at: 0,
+            created_by: None,
+            updated_at: None,
+            updated_by: None,
+            storage_root: storage_root.map(String::from),
+            storage_location: None,
         }
     }
 
     fn fake_schema(storage_root: Option<&str>) -> SchemaRow {
         SchemaRow {
-            id: Uuid::new_v4(), catalog_id: Uuid::new_v4(), name: "sch".into(),
-            comment: None, owner: None, created_at: 0, created_by: None,
-            updated_at: None, updated_by: None,
-            storage_root: storage_root.map(String::from), storage_location: None,
+            id: Uuid::new_v4(),
+            catalog_id: Uuid::new_v4(),
+            name: "sch".into(),
+            comment: None,
+            owner: None,
+            created_at: 0,
+            created_by: None,
+            updated_at: None,
+            updated_by: None,
+            storage_root: storage_root.map(String::from),
+            storage_location: None,
         }
     }
 

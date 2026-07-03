@@ -74,10 +74,13 @@ impl CloudCredentialVendor {
         let ttl = parse_expiry_ttl(&creds).unwrap_or(Duration::from_secs(55 * 60));
         {
             let mut cache = self.cache.lock().unwrap();
-            cache.insert(cache_key, CachedCredential {
-                creds: creds.clone(),
-                expires_at: Instant::now() + ttl,
-            });
+            cache.insert(
+                cache_key,
+                CachedCredential {
+                    creds: creds.clone(),
+                    expires_at: Instant::now() + ttl,
+                },
+            );
         }
 
         Ok(creds)
@@ -89,14 +92,19 @@ impl CloudCredentialVendor {
                 if let Some(ref aws) = self.aws {
                     return aws.vend(ctx).await;
                 }
-                Err(UcError::new(ErrorCode::Unimplemented, "AWS credential vending not configured"))
+                Err(UcError::new(
+                    ErrorCode::Unimplemented,
+                    "AWS credential vending not configured",
+                ))
             }
-            UriScheme::Abfs | UriScheme::Abfss => {
-                Err(UcError::new(ErrorCode::Unimplemented, "Azure credential vending not yet implemented"))
-            }
-            UriScheme::Gs => {
-                Err(UcError::new(ErrorCode::Unimplemented, "GCP credential vending not yet implemented"))
-            }
+            UriScheme::Abfs | UriScheme::Abfss => Err(UcError::new(
+                ErrorCode::Unimplemented,
+                "Azure credential vending not yet implemented",
+            )),
+            UriScheme::Gs => Err(UcError::new(
+                ErrorCode::Unimplemented,
+                "GCP credential vending not yet implemented",
+            )),
             UriScheme::File | UriScheme::Null => Ok(TemporaryCredentials::default()),
         }
     }
@@ -116,7 +124,9 @@ fn make_cache_key(ctx: &CredentialContext) -> String {
 /// Parse expiry from the credential's expiration field (RFC3339 string).
 /// Returns a Duration from now to (expiry - buffer).
 fn parse_expiry_ttl(creds: &TemporaryCredentials) -> Option<Duration> {
-    let exp_str = creds.aws_temp_credentials.as_ref()
+    let exp_str = creds
+        .aws_temp_credentials
+        .as_ref()
         .and_then(|a| a.expiration.as_deref())
         .or_else(|| creds.expiration_time.as_deref())?;
 
@@ -147,8 +157,12 @@ impl AwsCredentialVendor {
         let config = aws_config::load_defaults(aws_config::BehaviorVersion::latest()).await;
         let sts_client = Client::new(&config);
 
-        let role_arn = ctx.role_arn.as_deref()
-            .ok_or_else(|| UcError::new(ErrorCode::InvalidArgument, "No role ARN configured for credential"))?;
+        let role_arn = ctx.role_arn.as_deref().ok_or_else(|| {
+            UcError::new(
+                ErrorCode::InvalidArgument,
+                "No role ARN configured for credential",
+            )
+        })?;
 
         let mut req = sts_client
             .assume_role()
@@ -159,10 +173,12 @@ impl AwsCredentialVendor {
             req = req.external_id(ext_id);
         }
 
-        let response = req.send().await
-            .map_err(|e| UcError::new(ErrorCode::Internal, format!("STS AssumeRole failed: {}", e)))?;
+        let response = req.send().await.map_err(|e| {
+            UcError::new(ErrorCode::Internal, format!("STS AssumeRole failed: {}", e))
+        })?;
 
-        let creds = response.credentials()
+        let creds = response
+            .credentials()
             .ok_or_else(|| UcError::new(ErrorCode::Internal, "STS returned no credentials"))?;
 
         let access_key_id = creds.access_key_id().to_string();
@@ -203,7 +219,9 @@ fn is_write_operation(op: &crate::context::CredentialOperation) -> bool {
 /// Split an `s3://bucket/key...` URL into (bucket, key). Returns `None` if the
 /// URL isn't `s3://`-scheme or has no key component.
 fn split_s3_url(url: &str) -> Option<(&str, &str)> {
-    let stripped = url.strip_prefix("s3://").or_else(|| url.strip_prefix("s3a://"))?;
+    let stripped = url
+        .strip_prefix("s3://")
+        .or_else(|| url.strip_prefix("s3a://"))?;
     stripped.split_once('/')
 }
 
@@ -243,7 +261,8 @@ async fn presign_s3_url(
         "uc-vended",
     );
 
-    let mut s3_config_builder = aws_sdk_s3::config::Builder::from(sdk_config).credentials_provider(creds);
+    let mut s3_config_builder =
+        aws_sdk_s3::config::Builder::from(sdk_config).credentials_provider(creds);
     if let Some(ref endpoint_url) = endpoint {
         // A custom endpoint means we're talking to a non-AWS S3-compatible
         // store (MinIO, etc.), not real AWS S3. Those don't support
@@ -251,7 +270,9 @@ async fn presign_s3_url(
         // default -- so the presigned URL's host would be an unresolvable
         // "<bucket>.<endpoint>" name. Force path-style ("<endpoint>/<bucket>/...")
         // instead. Real AWS S3 (no endpoint override) keeps the SDK default.
-        s3_config_builder = s3_config_builder.endpoint_url(endpoint_url).force_path_style(true);
+        s3_config_builder = s3_config_builder
+            .endpoint_url(endpoint_url)
+            .force_path_style(true);
     }
     let s3_client = aws_sdk_s3::Client::from_conf(s3_config_builder.build());
 
@@ -344,7 +365,11 @@ mod tests {
         // new() (not with_aws()) has no AWS vendor configured -> Unimplemented
         assert!(result.is_err());
         let msg = result.unwrap_err().to_string();
-        assert!(msg.contains("UNIMPLEMENTED") || msg.contains("not configured") || msg.contains("not yet"));
+        assert!(
+            msg.contains("UNIMPLEMENTED")
+                || msg.contains("not configured")
+                || msg.contains("not yet")
+        );
     }
 
     #[tokio::test]
@@ -450,7 +475,7 @@ mod tests {
 
     #[test]
     fn parse_expiry_ttl_future_returns_some() {
-        use uc_openapi::catalog::{TemporaryCredentials, AwsCredentials};
+        use uc_openapi::catalog::{AwsCredentials, TemporaryCredentials};
 
         let future = chrono::Utc::now() + chrono::Duration::minutes(60);
         let creds = TemporaryCredentials {
@@ -466,12 +491,16 @@ mod tests {
         assert!(ttl.is_some());
         // TTL = (60min - 1min buffer) ≈ 59min; allow some slack for slow CI
         let secs = ttl.unwrap().as_secs();
-        assert!(secs > 3000 && secs <= 3600, "expected ~55-59 min TTL, got {}s", secs);
+        assert!(
+            secs > 3000 && secs <= 3600,
+            "expected ~55-59 min TTL, got {}s",
+            secs
+        );
     }
 
     #[test]
     fn parse_expiry_ttl_past_returns_none() {
-        use uc_openapi::catalog::{TemporaryCredentials, AwsCredentials};
+        use uc_openapi::catalog::{AwsCredentials, TemporaryCredentials};
 
         let past = chrono::Utc::now() - chrono::Duration::minutes(5);
         let creds = TemporaryCredentials {
@@ -496,7 +525,7 @@ mod tests {
 
     #[test]
     fn parse_expiry_ttl_malformed_returns_none() {
-        use uc_openapi::catalog::{TemporaryCredentials, AwsCredentials};
+        use uc_openapi::catalog::{AwsCredentials, TemporaryCredentials};
         let creds = TemporaryCredentials {
             aws_temp_credentials: Some(AwsCredentials {
                 access_key_id: "AK".to_string(),
@@ -543,8 +572,8 @@ mod tests {
 
     #[test]
     fn is_write_operation_maps_read_write_correctly() {
-        use crate::context::CredentialOperation;
         use super::is_write_operation;
+        use crate::context::CredentialOperation;
 
         assert!(!is_write_operation(&CredentialOperation::Read));
         assert!(is_write_operation(&CredentialOperation::ReadWrite));
@@ -554,8 +583,14 @@ mod tests {
     fn split_s3_url_parses_bucket_and_key() {
         use super::split_s3_url;
 
-        assert_eq!(split_s3_url("s3://my-bucket/path/to/object"), Some(("my-bucket", "path/to/object")));
-        assert_eq!(split_s3_url("s3a://my-bucket/key"), Some(("my-bucket", "key")));
+        assert_eq!(
+            split_s3_url("s3://my-bucket/path/to/object"),
+            Some(("my-bucket", "path/to/object"))
+        );
+        assert_eq!(
+            split_s3_url("s3a://my-bucket/key"),
+            Some(("my-bucket", "key"))
+        );
         assert_eq!(split_s3_url("s3://bucket-only"), None);
         assert_eq!(split_s3_url("file:///tmp/x"), None);
         assert_eq!(split_s3_url("https://example.com/x"), None);

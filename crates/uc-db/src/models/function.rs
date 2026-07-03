@@ -30,7 +30,7 @@ pub struct FunctionParamRow {
     pub id: Uuid,
     pub function_id: Uuid,
     pub name: String,
-    pub input_or_return: i16,   // 0=INPUT, 1=RETURN
+    pub input_or_return: i16, // 0=INPUT, 1=RETURN
     pub ordinal_position: i32,
     pub type_text: Option<String>,
     pub type_json: Option<String>,

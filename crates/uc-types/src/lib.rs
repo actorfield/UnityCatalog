@@ -91,10 +91,24 @@ impl Privilege {
     pub fn specific() -> &'static [Privilege] {
         use Privilege::*;
         &[
-            CreateCatalog, UseCatalog, CreateSchema, UseSchema, CreateTable,
-            Select, Modify, CreateFunction, Execute, CreateVolume, ReadVolume,
-            CreateModel, CreateExternalLocation, ReadFiles, WriteFiles,
-            CreateExternalTable, CreateExternalVolume, CreateManagedStorage,
+            CreateCatalog,
+            UseCatalog,
+            CreateSchema,
+            UseSchema,
+            CreateTable,
+            Select,
+            Modify,
+            CreateFunction,
+            Execute,
+            CreateVolume,
+            ReadVolume,
+            CreateModel,
+            CreateExternalLocation,
+            ReadFiles,
+            WriteFiles,
+            CreateExternalTable,
+            CreateExternalVolume,
+            CreateManagedStorage,
             CreateStorageCredential,
         ]
     }
@@ -219,8 +233,14 @@ mod tests {
     fn uri_scheme_detection() {
         assert_eq!(UriScheme::from_url("s3://my-bucket/path"), UriScheme::S3);
         assert_eq!(UriScheme::from_url("s3a://bucket/path"), UriScheme::S3);
-        assert_eq!(UriScheme::from_url("abfs://container@account"), UriScheme::Abfs);
-        assert_eq!(UriScheme::from_url("abfss://container@account"), UriScheme::Abfss);
+        assert_eq!(
+            UriScheme::from_url("abfs://container@account"),
+            UriScheme::Abfs
+        );
+        assert_eq!(
+            UriScheme::from_url("abfss://container@account"),
+            UriScheme::Abfss
+        );
         assert_eq!(UriScheme::from_url("gs://bucket/path"), UriScheme::Gs);
         assert_eq!(UriScheme::from_url("/local/path"), UriScheme::File);
         assert_eq!(UriScheme::from_url("file:///local/path"), UriScheme::File);
@@ -231,13 +251,26 @@ mod tests {
     fn all_privileges_round_trip_casbin() {
         // Every privilege must survive as_casbin_str → from_casbin_str
         let all = [
-            Privilege::Owner, Privilege::AllPrivileges, Privilege::CreateCatalog, Privilege::UseCatalog,
-            Privilege::CreateSchema, Privilege::UseSchema, Privilege::CreateTable,
-            Privilege::Select, Privilege::Modify, Privilege::CreateFunction,
-            Privilege::Execute, Privilege::CreateVolume, Privilege::ReadVolume,
-            Privilege::CreateModel, Privilege::CreateExternalLocation,
-            Privilege::ReadFiles, Privilege::WriteFiles, Privilege::CreateExternalTable,
-            Privilege::CreateExternalVolume, Privilege::CreateManagedStorage,
+            Privilege::Owner,
+            Privilege::AllPrivileges,
+            Privilege::CreateCatalog,
+            Privilege::UseCatalog,
+            Privilege::CreateSchema,
+            Privilege::UseSchema,
+            Privilege::CreateTable,
+            Privilege::Select,
+            Privilege::Modify,
+            Privilege::CreateFunction,
+            Privilege::Execute,
+            Privilege::CreateVolume,
+            Privilege::ReadVolume,
+            Privilege::CreateModel,
+            Privilege::CreateExternalLocation,
+            Privilege::ReadFiles,
+            Privilege::WriteFiles,
+            Privilege::CreateExternalTable,
+            Privilege::CreateExternalVolume,
+            Privilege::CreateManagedStorage,
             Privilege::CreateStorageCredential,
         ];
         for p in &all {
@@ -272,17 +305,50 @@ mod tests {
 
     #[test]
     fn securable_type_from_str() {
-        assert!(matches!(SecurableType::from_str("CATALOG"), Some(SecurableType::Catalog)));
-        assert!(matches!(SecurableType::from_str("catalog"), Some(SecurableType::Catalog)));
-        assert!(matches!(SecurableType::from_str("SCHEMA"), Some(SecurableType::Schema)));
-        assert!(matches!(SecurableType::from_str("TABLE"), Some(SecurableType::Table)));
-        assert!(matches!(SecurableType::from_str("VOLUME"), Some(SecurableType::Volume)));
-        assert!(matches!(SecurableType::from_str("FUNCTION"), Some(SecurableType::Function)));
-        assert!(matches!(SecurableType::from_str("MODEL"), Some(SecurableType::RegisteredModel)));
-        assert!(matches!(SecurableType::from_str("REGISTERED_MODEL"), Some(SecurableType::RegisteredModel)));
-        assert!(matches!(SecurableType::from_str("METASTORE"), Some(SecurableType::Metastore)));
-        assert!(matches!(SecurableType::from_str("EXTERNAL_LOCATION"), Some(SecurableType::ExternalLocation)));
-        assert!(matches!(SecurableType::from_str("STORAGE_CREDENTIAL"), Some(SecurableType::StorageCredential)));
+        assert!(matches!(
+            SecurableType::from_str("CATALOG"),
+            Some(SecurableType::Catalog)
+        ));
+        assert!(matches!(
+            SecurableType::from_str("catalog"),
+            Some(SecurableType::Catalog)
+        ));
+        assert!(matches!(
+            SecurableType::from_str("SCHEMA"),
+            Some(SecurableType::Schema)
+        ));
+        assert!(matches!(
+            SecurableType::from_str("TABLE"),
+            Some(SecurableType::Table)
+        ));
+        assert!(matches!(
+            SecurableType::from_str("VOLUME"),
+            Some(SecurableType::Volume)
+        ));
+        assert!(matches!(
+            SecurableType::from_str("FUNCTION"),
+            Some(SecurableType::Function)
+        ));
+        assert!(matches!(
+            SecurableType::from_str("MODEL"),
+            Some(SecurableType::RegisteredModel)
+        ));
+        assert!(matches!(
+            SecurableType::from_str("REGISTERED_MODEL"),
+            Some(SecurableType::RegisteredModel)
+        ));
+        assert!(matches!(
+            SecurableType::from_str("METASTORE"),
+            Some(SecurableType::Metastore)
+        ));
+        assert!(matches!(
+            SecurableType::from_str("EXTERNAL_LOCATION"),
+            Some(SecurableType::ExternalLocation)
+        ));
+        assert!(matches!(
+            SecurableType::from_str("STORAGE_CREDENTIAL"),
+            Some(SecurableType::StorageCredential)
+        ));
         assert!(SecurableType::from_str("UNKNOWN").is_none());
     }
 
