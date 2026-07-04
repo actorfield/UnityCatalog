@@ -138,6 +138,17 @@ impl UcAuthorizer {
         self.grant(admin_id, metastore_id, Privilege::Owner).await?;
         Ok(())
     }
+
+    /// Test-only: force a full `save_policy` snapshot through the adapter, so
+    /// tests can exercise the write path in isolation.
+    #[cfg(test)]
+    pub(crate) async fn force_save_policy(&self) -> Result<(), UcError> {
+        use casbin::CoreApi;
+        let mut enforcer = self.enforcer.write().await;
+        enforcer.save_policy().await.map_err(|e| {
+            UcError::new(ErrorCode::Internal, format!("save_policy failed: {}", e))
+        })
+    }
 }
 
 #[async_trait::async_trait]
