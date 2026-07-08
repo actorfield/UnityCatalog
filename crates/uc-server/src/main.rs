@@ -332,7 +332,7 @@ async fn prepare_database_url(
     url: &str,
 ) -> anyhow::Result<(String, Option<S3Info>)> {
     let Some(stripped) = url.strip_prefix("s3://") else {
-        std::fs::create_dir_all("./etc/db").ok();
+        tokio::fs::create_dir_all("./etc/db").await.ok();
         return Ok((url.to_string(), None));
     };
 
@@ -343,7 +343,7 @@ async fn prepare_database_url(
 
     let s3_client = build_s3_client()?;
     let local_dir = config_dir.join("db");
-    std::fs::create_dir_all(&local_dir)?;
+    tokio::fs::create_dir_all(&local_dir).await?;
     let local_path = local_dir.join(format!("uc-{}.db", sanitize_filename(&key)));
 
     download_from_s3(&s3_client, &bucket, &key, &local_path).await?;
@@ -463,14 +463,15 @@ async fn fetch_oidc_jwks(issuer: &str) -> anyhow::Result<JwkSet> {
     // - CA cert: lets reqwest/rustls verify the k3s API server's self-signed cert.
     // - Bearer token: k3s requires auth on /.well-known/openid-configuration (returns 401 otherwise).
     let mut builder = reqwest::Client::builder();
-    if let Ok(pem) = std::fs::read("/var/run/secrets/kubernetes.io/serviceaccount/ca.crt") {
+    if let Ok(pem) = tokio::fs::read("/var/run/secrets/kubernetes.io/serviceaccount/ca.crt").await {
         if let Ok(cert) = reqwest::Certificate::from_pem(&pem) {
             builder = builder.add_root_certificate(cert);
         }
     }
     let client = builder.build().context("Failed to build HTTP client")?;
 
-    let sa_token = std::fs::read_to_string("/var/run/secrets/kubernetes.io/serviceaccount/token")
+    let sa_token = tokio::fs::read_to_string("/var/run/secrets/kubernetes.io/serviceaccount/token")
+        .await
         .unwrap_or_default();
     let sa_token = sa_token.trim();
 

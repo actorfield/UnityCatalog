@@ -66,7 +66,7 @@ pub async fn logout(State(_state): State<AppState>) -> StatusCode {
 
 pub async fn jwks(State(state): State<AppState>) -> Result<String, UcError> {
     let path = state.config_dir.join("certs.json");
-    std::fs::read_to_string(&path).map_err(|e| {
+    tokio::fs::read_to_string(&path).await.map_err(|e| {
         UcError::new(
             ErrorCode::Internal,
             format!("JWKS not found at {}: {}", path.display(), e),
