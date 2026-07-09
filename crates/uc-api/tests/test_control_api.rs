@@ -39,7 +39,7 @@ async fn scim2_user_create_list_get_delete() {
     // PUT update
     let req = axum::http::Request::builder()
         .method("PUT")
-        .uri(&format!("{CTRL}/scim2/Users/{uid}"))
+        .uri(format!("{CTRL}/scim2/Users/{uid}"))
         .header("content-type", "application/json")
         .body(axum::body::Body::from(
             serde_json::to_vec(&json!({"userName":"alice_new@test.com","active":true})).unwrap(),
@@ -51,7 +51,7 @@ async fn scim2_user_create_list_get_delete() {
     // PATCH disable
     let req2 = axum::http::Request::builder()
         .method("PATCH")
-        .uri(&format!("{CTRL}/scim2/Users/{uid}"))
+        .uri(format!("{CTRL}/scim2/Users/{uid}"))
         .header("content-type", "application/json")
         .body(axum::body::Body::from(
             serde_json::to_vec(&json!({
@@ -72,7 +72,7 @@ async fn scim2_user_create_list_get_delete() {
     // Delete
     let req3 = axum::http::Request::builder()
         .method("DELETE")
-        .uri(&format!("{CTRL}/scim2/Users/{uid}"))
+        .uri(format!("{CTRL}/scim2/Users/{uid}"))
         .body(axum::body::Body::empty())
         .unwrap();
     let res3 = app.clone().oneshot(req3).await.unwrap();

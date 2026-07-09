@@ -1,3 +1,8 @@
+// Each integration test file is compiled as its own binary and pulls in this
+// module separately, so helpers unused by one binary but used by another
+// trip dead_code false positives.
+#![allow(dead_code)]
+
 use axum::body::to_bytes;
 /// Shared test infrastructure for in-process axum handler tests.
 ///

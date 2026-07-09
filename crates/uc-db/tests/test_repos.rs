@@ -2,15 +2,11 @@
 /// These test every repo method directly — no HTTP layer.
 use uc_db::{
     models::{
-        catalog::CatalogRow,
         credential::CredentialRow,
         delta::DeltaCommitRow,
         external_location::ExternalLocationRow,
-        metastore::MetastoreRow,
-        schema::SchemaRow,
         staging::StagingTableRow,
         table::{ColumnRow, TableRow},
-        user::UserRow,
         volume::VolumeRow,
     },
     pool::run_migrations,

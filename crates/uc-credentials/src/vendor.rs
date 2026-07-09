@@ -128,7 +128,7 @@ fn parse_expiry_ttl(creds: &TemporaryCredentials) -> Option<Duration> {
         .aws_temp_credentials
         .as_ref()
         .and_then(|a| a.expiration.as_deref())
-        .or_else(|| creds.expiration_time.as_deref())?;
+        .or(creds.expiration_time.as_deref())?;
 
     let exp = chrono::DateTime::parse_from_rfc3339(exp_str).ok()?;
     let now = chrono::Utc::now();
@@ -144,6 +144,12 @@ fn parse_expiry_ttl(creds: &TemporaryCredentials) -> Option<Duration> {
 // ── AWS Credential Vendor ─────────────────────────────────────────────────────
 
 pub struct AwsCredentialVendor;
+
+impl Default for AwsCredentialVendor {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 impl AwsCredentialVendor {
     pub fn new() -> Self {

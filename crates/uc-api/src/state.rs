@@ -19,6 +19,8 @@ pub struct AppState {
 }
 
 impl AppState {
+    // One arg per AppState field; a builder would just move the noise.
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         pool: AnyPool,
         authorizer: Arc<dyn Authorizer>,

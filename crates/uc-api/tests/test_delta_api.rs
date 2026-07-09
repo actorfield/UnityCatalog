@@ -64,7 +64,7 @@ async fn delta_table_exists_head() {
 
     let req = axum::http::Request::builder()
         .method("HEAD")
-        .uri(&delta_tables("head_t"))
+        .uri(delta_tables("head_t"))
         .body(axum::body::Body::empty())
         .unwrap();
     let res = app.clone().oneshot(req).await.unwrap();
@@ -72,7 +72,7 @@ async fn delta_table_exists_head() {
 
     let req2 = axum::http::Request::builder()
         .method("HEAD")
-        .uri(&delta_tables("no_such_table"))
+        .uri(delta_tables("no_such_table"))
         .body(axum::body::Body::empty())
         .unwrap();
     let res2 = app.clone().oneshot(req2).await.unwrap();
@@ -250,7 +250,7 @@ async fn delta_rename_table() {
 
     let req = axum::http::Request::builder()
         .method("GET")
-        .uri(&delta_tables("ren_src"))
+        .uri(delta_tables("ren_src"))
         .body(axum::body::Body::empty())
         .unwrap();
     let res = app.clone().oneshot(req).await.unwrap();
@@ -271,7 +271,7 @@ async fn delta_delete_table() {
     .await;
     let req = axum::http::Request::builder()
         .method("DELETE")
-        .uri(&delta_tables("del_dt"))
+        .uri(delta_tables("del_dt"))
         .body(axum::body::Body::empty())
         .unwrap();
     let res = app.clone().oneshot(req).await.unwrap();

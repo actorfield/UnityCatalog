@@ -145,9 +145,10 @@ impl UcAuthorizer {
     pub(crate) async fn force_save_policy(&self) -> Result<(), UcError> {
         use casbin::CoreApi;
         let mut enforcer = self.enforcer.write().await;
-        enforcer.save_policy().await.map_err(|e| {
-            UcError::new(ErrorCode::Internal, format!("save_policy failed: {}", e))
-        })
+        enforcer
+            .save_policy()
+            .await
+            .map_err(|e| UcError::new(ErrorCode::Internal, format!("save_policy failed: {}", e)))
     }
 }
 
