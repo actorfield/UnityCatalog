@@ -61,13 +61,17 @@ RUN cargo chef prepare --bin uc-server --recipe-path recipe.json
 
 FROM chef AS builder
 COPY --from=planner /app/recipe.json recipe.json
-# Own target/ cache id (separate Cargo.lock from aispecs/operator); registry cache id is shared globally.
+# Own target/ cache id (separate Cargo.lock from aispecs/operator); registry cache id is
+# shared globally. The "-alpine" suffix ties this cache to the builder base image: compiled
+# .rlib/.so artifacts are toolchain/ABI-specific, so reusing a cache built under a different
+# base (e.g. glibc rust:latest) causes relocation failures like a missing __ubsan_handle_*
+# symbol. Bump this suffix again if the builder base image changes.
 RUN --mount=type=cache,target=/usr/local/cargo/registry,id=cargo-registry \
-    --mount=type=cache,target=/app/target,id=cargo-target-uc \
+    --mount=type=cache,target=/app/target,id=cargo-target-uc-alpine \
     cargo chef cook --zigbuild --profile docker --bin uc-server --target "$(cat /rust_target.txt)" --recipe-path recipe.json
 COPY . .
 RUN --mount=type=cache,target=/usr/local/cargo/registry,id=cargo-registry \
-    --mount=type=cache,target=/app/target,id=cargo-target-uc \
+    --mount=type=cache,target=/app/target,id=cargo-target-uc-alpine \
     cargo zigbuild --profile docker --target "$(cat /rust_target.txt)" -p uc-server && \
     cp "/app/target/$(cat /rust_target.txt)/docker/uc-server" /uc-server-bin
 
