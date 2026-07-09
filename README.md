@@ -32,7 +32,7 @@ unitycatalog-rs/
 | Database | `sqlx 0.7` (SQLite default, Postgres via feature flag) |
 | Auth | `jsonwebtoken 9` (RS512 JWT) + `casbin` (RBAC) |
 | Serialization | `serde` + `serde_json` |
-| Cloud credentials | `aws-sdk-sts` (feature-gated) |
+| Cloud credentials | `aws-sdk-sts` (always compiled in; vending toggled at runtime via `--enable-aws-credentials`, default on) |
 
 ## Quick Start
 
@@ -144,7 +144,7 @@ Migrations run automatically on startup from `migrations/sqlite/` or `migrations
 
 ```bash
 cargo check          # fast type check
-cargo test --lib     # 16 unit tests (JWT, serde, error mapping)
+cargo test --lib     # unit tests across the workspace (JWT, serde, error mapping, ...)
 cargo build          # full build
 ```
 
