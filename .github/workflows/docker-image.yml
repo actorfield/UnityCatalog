@@ -11,26 +11,27 @@ on:
 jobs:
   fmt:
     runs-on: ubuntu-latest
+    container: rust:slim
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          components: rustfmt
+      - name: Install rustfmt
+        run: rustup component add rustfmt
 
       - name: Check formatting
         run: cargo fmt --all -- --check
 
   clippy:
     runs-on: ubuntu-latest
+    container: rust:slim
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          components: clippy
+      - name: Install build deps
+        run: apt-get update && apt-get install -y --no-install-recommends build-essential pkg-config
+
+      - name: Install clippy
+        run: rustup component add clippy
 
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
@@ -42,11 +43,12 @@ jobs:
 
   test:
     runs-on: ubuntu-latest
+    container: rust:slim
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+      - name: Install build deps
+        run: apt-get update && apt-get install -y --no-install-recommends build-essential pkg-config
 
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
