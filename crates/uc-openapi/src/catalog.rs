@@ -792,7 +792,7 @@ pub struct GcpOauthToken {
     pub oauth_token: String,
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
 pub struct TemporaryCredentials {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub aws_temp_credentials: Option<AwsCredentials>,
@@ -804,18 +804,6 @@ pub struct TemporaryCredentials {
     pub expiration_time: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub url: Option<String>,
-}
-
-impl Default for TemporaryCredentials {
-    fn default() -> Self {
-        Self {
-            aws_temp_credentials: None,
-            azure_user_delegation_sas: None,
-            gcp_oauth_token: None,
-            expiration_time: None,
-            url: None,
-        }
-    }
 }
 
 #[derive(Debug, Serialize, Deserialize)]

@@ -1,7 +1,11 @@
 use anyhow::Context;
 use axum::Router;
 use clap::Parser;
-use std::{net::SocketAddr, path::PathBuf, sync::Arc};
+use std::{
+    net::SocketAddr,
+    path::{Path, PathBuf},
+    sync::Arc,
+};
 use tracing::info;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 use uc_api::{catalog_api, control_api, delta_api, middleware::auth_middleware, state::AppState};
@@ -190,28 +194,26 @@ async fn main() -> anyhow::Result<()> {
 
     // ── 5. Admin user initialization ──────────────────────────────────────────
     let admin_email = "admin@unitycatalog.io";
-    if !args.no_auth {
-        if user::get_by_email(&pool, admin_email).await?.is_none() {
-            // UUIDv7: time-ordered — encodes when this admin user was created
-            let admin_id = Uuid::now_v7();
-            let now = chrono::Utc::now().timestamp_millis();
-            user::create(
-                &pool,
-                admin_id,
-                admin_email,
-                Some(admin_email),
-                None,
-                "ENABLED",
-                now,
-            )
+    if !args.no_auth && user::get_by_email(&pool, admin_email).await?.is_none() {
+        // UUIDv7: time-ordered — encodes when this admin user was created
+        let admin_id = Uuid::now_v7();
+        let now = chrono::Utc::now().timestamp_millis();
+        user::create(
+            &pool,
+            admin_id,
+            admin_email,
+            Some(admin_email),
+            None,
+            "ENABLED",
+            now,
+        )
+        .await
+        .context("Failed to create admin user")?;
+        authorizer
+            .grant(admin_id, metastore_id, uc_types::Privilege::Owner)
             .await
-            .context("Failed to create admin user")?;
-            authorizer
-                .grant(admin_id, metastore_id, uc_types::Privilege::Owner)
-                .await
-                .context("Failed to grant admin OWNER on metastore")?;
-            info!("Created admin user: {}", admin_email);
-        }
+            .context("Failed to grant admin OWNER on metastore")?;
+        info!("Created admin user: {}", admin_email);
     }
 
     // ── 5b. Operator bootstrap principal (Tier 2 auto-provisioning) ───────────
@@ -328,7 +330,7 @@ struct S3Info {
 }
 
 async fn prepare_database_url(
-    config_dir: &PathBuf,
+    config_dir: &Path,
     url: &str,
 ) -> anyhow::Result<(String, Option<S3Info>)> {
     let Some(stripped) = url.strip_prefix("s3://") else {
@@ -443,7 +445,7 @@ fn base64_encode(input: &str) -> String {
         buf.push(ENC_TABLE[((n >> 6) & 63) as usize]);
         buf.push(ENC_TABLE[(n & 63) as usize]);
     }
-    let padding = (3 - input.as_bytes().len() % 3) % 3;
+    let padding = (3 - input.len() % 3) % 3;
     for _ in 0..padding {
         buf.pop();
         buf.push(b'=');

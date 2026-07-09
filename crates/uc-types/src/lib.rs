@@ -191,7 +191,7 @@ pub enum SecurableType {
 }
 
 impl SecurableType {
-    pub fn from_str(s: &str) -> Option<Self> {
+    pub fn parse(s: &str) -> Option<Self> {
         match s.to_uppercase().as_str() {
             "METASTORE" => Some(Self::Metastore),
             "CATALOG" => Some(Self::Catalog),
@@ -306,50 +306,50 @@ mod tests {
     #[test]
     fn securable_type_from_str() {
         assert!(matches!(
-            SecurableType::from_str("CATALOG"),
+            SecurableType::parse("CATALOG"),
             Some(SecurableType::Catalog)
         ));
         assert!(matches!(
-            SecurableType::from_str("catalog"),
+            SecurableType::parse("catalog"),
             Some(SecurableType::Catalog)
         ));
         assert!(matches!(
-            SecurableType::from_str("SCHEMA"),
+            SecurableType::parse("SCHEMA"),
             Some(SecurableType::Schema)
         ));
         assert!(matches!(
-            SecurableType::from_str("TABLE"),
+            SecurableType::parse("TABLE"),
             Some(SecurableType::Table)
         ));
         assert!(matches!(
-            SecurableType::from_str("VOLUME"),
+            SecurableType::parse("VOLUME"),
             Some(SecurableType::Volume)
         ));
         assert!(matches!(
-            SecurableType::from_str("FUNCTION"),
+            SecurableType::parse("FUNCTION"),
             Some(SecurableType::Function)
         ));
         assert!(matches!(
-            SecurableType::from_str("MODEL"),
+            SecurableType::parse("MODEL"),
             Some(SecurableType::RegisteredModel)
         ));
         assert!(matches!(
-            SecurableType::from_str("REGISTERED_MODEL"),
+            SecurableType::parse("REGISTERED_MODEL"),
             Some(SecurableType::RegisteredModel)
         ));
         assert!(matches!(
-            SecurableType::from_str("METASTORE"),
+            SecurableType::parse("METASTORE"),
             Some(SecurableType::Metastore)
         ));
         assert!(matches!(
-            SecurableType::from_str("EXTERNAL_LOCATION"),
+            SecurableType::parse("EXTERNAL_LOCATION"),
             Some(SecurableType::ExternalLocation)
         ));
         assert!(matches!(
-            SecurableType::from_str("STORAGE_CREDENTIAL"),
+            SecurableType::parse("STORAGE_CREDENTIAL"),
             Some(SecurableType::StorageCredential)
         ));
-        assert!(SecurableType::from_str("UNKNOWN").is_none());
+        assert!(SecurableType::parse("UNKNOWN").is_none());
     }
 
     #[test]

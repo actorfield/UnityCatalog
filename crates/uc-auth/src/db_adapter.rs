@@ -277,7 +277,7 @@ impl Adapter for SqlxAdapter {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+
     use crate::{Authorizer, UcAuthorizer};
     use uc_db::AnyPool;
     use uc_types::Privilege;
@@ -365,7 +365,10 @@ mod tests {
         let catalog = Uuid::new_v4();
 
         let auth1 = UcAuthorizer::new_with_db(pool.clone()).await.unwrap();
-        auth1.grant(principal, catalog, Privilege::Owner).await.unwrap();
+        auth1
+            .grant(principal, catalog, Privilege::Owner)
+            .await
+            .unwrap();
 
         // Simulate restart — fresh enforcer loads g/g2/g3 from the same DB.
         let auth2 = UcAuthorizer::new_with_db(pool.clone()).await.unwrap();
@@ -376,7 +379,10 @@ mod tests {
             Privilege::Select,
         ] {
             assert!(
-                auth2.authorize(principal, catalog, req.clone()).await.unwrap(),
+                auth2
+                    .authorize(principal, catalog, req.clone())
+                    .await
+                    .unwrap(),
                 "OWNER must imply {:?} via g3 after restart (g3 must load into section \"g\")",
                 req
             );
@@ -396,7 +402,10 @@ mod tests {
         let schema = Uuid::new_v4();
 
         let auth1 = UcAuthorizer::new_with_db(pool.clone()).await.unwrap();
-        auth1.grant(principal, catalog, Privilege::Owner).await.unwrap();
+        auth1
+            .grant(principal, catalog, Privilege::Owner)
+            .await
+            .unwrap();
         auth1.add_hierarchy_child(catalog, schema).await.unwrap();
 
         // Force a full snapshot save (the path that previously mislabeled ptypes).
@@ -405,11 +414,17 @@ mod tests {
         // Reload from the snapshot and verify both hierarchies survived.
         let auth2 = UcAuthorizer::new_with_db(pool.clone()).await.unwrap();
         assert!(
-            auth2.authorize(principal, catalog, Privilege::CreateSchema).await.unwrap(),
+            auth2
+                .authorize(principal, catalog, Privilege::CreateSchema)
+                .await
+                .unwrap(),
             "g3 (OWNER→CREATE_SCHEMA) must survive a save_policy snapshot"
         );
         assert!(
-            auth2.authorize(principal, schema, Privilege::CreateTable).await.unwrap(),
+            auth2
+                .authorize(principal, schema, Privilege::CreateTable)
+                .await
+                .unwrap(),
             "g2 (catalog→schema) + g3 must survive a save_policy snapshot"
         );
     }

@@ -19,7 +19,6 @@ unitycatalog-rs/
 ├── migrations/
 │   ├── sqlite/          DDL for SQLite (default)
 │   └── postgres/        DDL for PostgreSQL
-├── ui/                  React frontend (proxy → server on :8080)
 ├── tests/python/        Pytest integration tests
 ├── scripts/
 │   └── seed.py          Seeds sample data (unity catalog + default schema)
@@ -71,17 +70,7 @@ python3 scripts/seed.py http://localhost:8080
 
 This creates: catalog `unity`, schema `default`, tables (marksheet, numbers, user_countries), volumes (txt_files, json_files), functions (sum, lowercase).
 
-### 4. Open the UI
-
-```bash
-cd ui
-npm install
-npm start          # → http://localhost:3000
-```
-
-The UI proxies all `/api/*` requests to the server on `:8080`.
-
-### 5. Run integration tests
+### 4. Run integration tests
 
 ```bash
 pip install unitycatalog-client pytest pytest-asyncio

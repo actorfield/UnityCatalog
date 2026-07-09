@@ -56,7 +56,7 @@ async fn catalog_get_not_found() {
 async fn catalog_update_comment() {
     let (app, _) = build_test_app().await;
     post(&app, &format!("{UC}/catalogs"), json!({"name":"upd_cat"})).await;
-    let (status, body) = patch(
+    let (status, _body) = patch(
         &app,
         &format!("{UC}/catalogs/upd_cat"),
         json!({"comment":"updated"}),

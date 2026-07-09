@@ -3,6 +3,8 @@ use crate::{models::catalog::CatalogRow, pool::AnyPool};
 use uc_errors::{ErrorCode, UcError};
 use uuid::Uuid;
 
+// One arg per column of the INSERT below; a params struct would just move the noise.
+#[allow(clippy::too_many_arguments)]
 pub async fn create(
     pool: &AnyPool,
     id: Uuid,

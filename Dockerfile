@@ -1,7 +1,7 @@
-FROM rust:latest AS chef
+FROM --platform=$BUILDPLATFORM rust:alpine AS chef
 # TARGETARCH: auto-set by buildkit/buildah from host arch unless --platform is passed.
 ARG TARGETARCH
-RUN apt-get update && apt-get install -y pkg-config python3-pip && rm -rf /var/lib/apt/lists/*
+RUN apk add --no-cache build-base bash pkgconf python3 py3-pip
 RUN pip install ziglang --break-system-packages
 RUN cargo install cargo-chef cargo-zigbuild
 # cook must use --zigbuild too, or its fingerprint won't match the final build and everything recompiles twice.
