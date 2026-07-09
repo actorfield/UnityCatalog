@@ -13,7 +13,9 @@ RUN case "$TARGETARCH" in \
     echo "$triple" > /rust_target.txt; \
     rustup target add "$triple"; \
     echo "$zigtriple" > /zig_target.txt
-# cc-rs detects zig cc as clang and appends its own --target=<rust-triple>, which breaks zig's -target parser; strip it.
+# cc-rs detects zig cc/c++ as clang and appends its own --target=<rust-triple>,
+# which breaks zig's -target parser. Strip those flags via a wrapper so any
+# future C dependency's buildsystem links correctly against musl.
 RUN cat > /usr/local/bin/musl-cc <<'WRAP'
 #!/bin/bash
 zt=$(cat /zig_target.txt)
@@ -29,10 +31,27 @@ for a in "$@"; do
 done
 exec python3 -m ziglang cc -target "$zt" "${args[@]}"
 WRAP
-RUN chmod +x /usr/local/bin/musl-cc
+RUN cat > /usr/local/bin/musl-g++ <<'WRAP'
+#!/bin/bash
+zt=$(cat /zig_target.txt)
+args=()
+skip=0
+for a in "$@"; do
+  if [ "$skip" = 1 ]; then skip=0; continue; fi
+  case "$a" in
+    --target=*) continue ;;
+    -target) skip=1; continue ;;
+  esac
+  args+=("$a")
+done
+exec python3 -m ziglang c++ -target "$zt" "${args[@]}"
+WRAP
+RUN chmod +x /usr/local/bin/musl-cc /usr/local/bin/musl-g++
 ENV CC_x86_64_unknown_linux_musl=musl-cc
+ENV CXX_x86_64_unknown_linux_musl=musl-g++
 ENV AR_x86_64_unknown_linux_musl=ar
 ENV CC_aarch64_unknown_linux_musl=musl-cc
+ENV CXX_aarch64_unknown_linux_musl=musl-g++
 ENV AR_aarch64_unknown_linux_musl=ar
 WORKDIR /app
 
