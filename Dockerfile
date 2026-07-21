@@ -1,7 +1,7 @@
 FROM --platform=$BUILDPLATFORM rust:latest AS chef
 # TARGETARCH: auto-set by buildkit/buildah from host arch unless --platform is passed.
 ARG TARGETARCH
-RUN apt-get update && apt-get install -y pkg-config python3-pip && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y pkg-config python3-pip ca-certificates && rm -rf /var/lib/apt/lists/*
 RUN pip install ziglang --break-system-packages
 RUN cargo install cargo-chef cargo-zigbuild
 # cook must use --zigbuild too, or its fingerprint won't match the final build and everything recompiles twice.
@@ -80,5 +80,6 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry,id=cargo-registry \
     cp "/app/target/$(cat /rust_target.txt)/docker/uc-server" /uc-server-bin
 
 FROM scratch
+COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
 COPY --from=builder /uc-server-bin /uc-server
 ENTRYPOINT ["/uc-server"]
