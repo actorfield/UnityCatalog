@@ -69,7 +69,7 @@ RUN cargo chef prepare --bin uc-server --recipe-path recipe.json
 
 FROM chef AS builder
 COPY --from=planner /app/recipe.json recipe.json
-# Own target/ cache id (separate Cargo.lock from aispecs/operator); registry cache id is shared globally.
+# Own target/ cache id (this crate has its own Cargo.lock); registry cache id is shared globally.
 RUN --mount=type=cache,target=/usr/local/cargo/registry,id=cargo-registry \
     --mount=type=cache,target=/app/target,id=cargo-target-uc \
     cargo chef cook --zigbuild --profile docker --bin uc-server --target "$(cat /rust_target.txt)" --recipe-path recipe.json
