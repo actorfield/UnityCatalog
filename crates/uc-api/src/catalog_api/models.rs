@@ -165,17 +165,16 @@ pub async fn update_model(
     if let Some(ref new_name) = req.new_name {
         validate_sql_name(new_name)?;
     }
-    sqlx::query(
-        "UPDATE uc_registered_models SET name=COALESCE($1,name), comment=COALESCE($2,comment), owner=COALESCE($3,owner), updated_at=$4, updated_by=$5 WHERE id=$6"
+    model::update_model(
+        &state.pool,
+        existing.id,
+        req.new_name.as_deref(),
+        req.comment.as_deref(),
+        req.owner.as_deref(),
+        now,
+        auth_sub(&state, &claims),
     )
-    .bind(req.new_name.as_deref())
-    .bind(req.comment.as_deref())
-    .bind(req.owner.as_deref())
-    .bind(now)
-    .bind(auth_sub(&state, &claims))
-    .bind(existing.id)
-    .execute(state.pool.as_ref())
-    .await.map_err(crate::db_err)?;
+    .await?;
     if let Some(ref props) = req.properties {
         property::replace(&state.pool, existing.id, "registered_model", props).await?;
     }
@@ -239,12 +238,7 @@ pub async fn create_version(
     };
     let created = model::create_version(&state.pool, &row).await?;
     // Update max_version_number on the parent model
-    sqlx::query("UPDATE uc_registered_models SET max_version_number=$1 WHERE id=$2")
-        .bind(next_ver)
-        .bind(model.id)
-        .execute(state.pool.as_ref())
-        .await
-        .map_err(crate::db_err)?;
+    model::set_max_version(&state.pool, model.id, next_ver).await?;
     Ok(Json(to_version_info(
         created,
         &req.catalog_name,
@@ -260,13 +254,7 @@ pub async fn list_versions(
     let (cat, sch, mdl) = split3(&full_name)?;
     let schema = schema::get_by_full_name(&state.pool, cat, sch).await?;
     let model = model::get_model_by_schema_and_name(&state.pool, schema.id, mdl).await?;
-    let rows: Vec<ModelVersionRow> = sqlx::query_as::<_, ModelVersionRow>(
-        "SELECT * FROM uc_model_versions WHERE registered_model_id=$1 ORDER BY version",
-    )
-    .bind(model.id)
-    .fetch_all(state.pool.as_ref())
-    .await
-    .map_err(crate::db_err)?;
+    let rows = model::list_versions(&state.pool, model.id).await?;
     let model_versions = rows
         .into_iter()
         .map(|r| to_version_info(r, cat, sch, mdl))
@@ -309,12 +297,14 @@ pub async fn update_version(
         require(&state, user.id, model.id, Privilege::Owner).await?;
     }
     let now = now_ms();
-    sqlx::query("UPDATE uc_model_versions SET comment=COALESCE($1,comment), updated_at=$2, updated_by=$3 WHERE id=$4")
-        .bind(req.comment.as_deref())
-        .bind(now)
-        .bind(auth_sub(&state, &claims))
-        .bind(row.id)
-        .execute(state.pool.as_ref()).await.map_err(crate::db_err)?;
+    model::update_version(
+        &state.pool,
+        row.id,
+        req.comment.as_deref(),
+        now,
+        auth_sub(&state, &claims),
+    )
+    .await?;
     let updated = model::get_version(&state.pool, model.id, ver).await?;
     Ok(Json(to_version_info(updated, cat, sch, mdl)))
 }
@@ -352,12 +342,7 @@ pub async fn finalize_version(
         ModelVersionStatus::FailedRegistration => "FAILED_REGISTRATION",
         ModelVersionStatus::ModelVersionStatusUnknown => "MODEL_VERSION_STATUS_UNKNOWN",
     };
-    sqlx::query("UPDATE uc_model_versions SET status=$1 WHERE id=$2")
-        .bind(status_str)
-        .bind(row.id)
-        .execute(state.pool.as_ref())
-        .await
-        .map_err(crate::db_err)?;
+    model::set_version_status(&state.pool, row.id, status_str).await?;
     let updated = model::get_version(&state.pool, model.id, ver).await?;
     Ok(Json(to_version_info(updated, cat, sch, mdl)))
 }

@@ -84,3 +84,36 @@ pub async fn delete(pool: &AnyPool, name: &str) -> Result<(), UcError> {
     }
     Ok(())
 }
+
+/// Patch a credential in place.
+///
+/// Lifted out of the update handler in uc-api, which issued this UPDATE
+/// inline. `None` leaves a field alone, matching COALESCE.
+#[allow(clippy::too_many_arguments)]
+pub async fn update(
+    pool: &AnyPool,
+    id: Uuid,
+    new_name: Option<&str>,
+    comment: Option<&str>,
+    owner: Option<&str>,
+    credential: Option<&str>,
+    updated_at: i64,
+    updated_by: Option<&str>,
+) -> Result<(), UcError> {
+    sqlx::query(
+        "UPDATE uc_credentials SET name=COALESCE($1,name), comment=COALESCE($2,comment), \
+         owner=COALESCE($3,owner), credential=COALESCE($4,credential), updated_at=$5, \
+         updated_by=$6 WHERE id=$7",
+    )
+    .bind(new_name)
+    .bind(comment)
+    .bind(owner)
+    .bind(credential)
+    .bind(updated_at)
+    .bind(updated_by)
+    .bind(id)
+    .execute(pool)
+    .await
+    .map_err(crate::sqlx_err)?;
+    Ok(())
+}

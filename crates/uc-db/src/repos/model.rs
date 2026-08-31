@@ -125,3 +125,84 @@ pub async fn delete_version(pool: &AnyPool, model_id: Uuid, version: i32) -> Res
         .map_err(crate::sqlx_err)?;
     Ok(())
 }
+
+/// Patch a registered model in place. Lifted out of the uc-api handler.
+pub async fn update_model(
+    pool: &AnyPool,
+    id: Uuid,
+    new_name: Option<&str>,
+    comment: Option<&str>,
+    owner: Option<&str>,
+    updated_at: i64,
+    updated_by: Option<&str>,
+) -> Result<(), UcError> {
+    sqlx::query(
+        "UPDATE uc_registered_models SET name=COALESCE($1,name), comment=COALESCE($2,comment), \
+         owner=COALESCE($3,owner), updated_at=$4, updated_by=$5 WHERE id=$6",
+    )
+    .bind(new_name)
+    .bind(comment)
+    .bind(owner)
+    .bind(updated_at)
+    .bind(updated_by)
+    .bind(id)
+    .execute(pool)
+    .await
+    .map_err(crate::sqlx_err)?;
+    Ok(())
+}
+
+pub async fn set_max_version(pool: &AnyPool, id: Uuid, next: i32) -> Result<(), UcError> {
+    sqlx::query("UPDATE uc_registered_models SET max_version_number=$1 WHERE id=$2")
+        .bind(next)
+        .bind(id)
+        .execute(pool)
+        .await
+        .map_err(crate::sqlx_err)?;
+    Ok(())
+}
+
+/// All versions of a model, `ORDER BY version`.
+pub async fn list_versions(
+    pool: &AnyPool,
+    model_id: Uuid,
+) -> Result<Vec<ModelVersionRow>, UcError> {
+    sqlx::query_as::<_, ModelVersionRow>(
+        "SELECT * FROM uc_model_versions WHERE registered_model_id=$1 ORDER BY version",
+    )
+    .bind(model_id)
+    .fetch_all(pool)
+    .await
+    .map_err(crate::sqlx_err)
+}
+
+pub async fn update_version(
+    pool: &AnyPool,
+    id: Uuid,
+    comment: Option<&str>,
+    updated_at: i64,
+    updated_by: Option<&str>,
+) -> Result<(), UcError> {
+    sqlx::query(
+        "UPDATE uc_model_versions SET comment=COALESCE($1,comment), updated_at=$2, \
+         updated_by=$3 WHERE id=$4",
+    )
+    .bind(comment)
+    .bind(updated_at)
+    .bind(updated_by)
+    .bind(id)
+    .execute(pool)
+    .await
+    .map_err(crate::sqlx_err)?;
+    Ok(())
+}
+
+pub async fn set_version_status(pool: &AnyPool, id: Uuid, status: &str) -> Result<(), UcError> {
+    sqlx::query("UPDATE uc_model_versions SET status=$1 WHERE id=$2")
+        .bind(status)
+        .bind(id)
+        .execute(pool)
+        .await
+        .map_err(crate::sqlx_err)?;
+    Ok(())
+}

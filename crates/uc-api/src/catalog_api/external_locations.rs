@@ -130,18 +130,18 @@ pub async fn update(
     } else {
         None
     };
-    sqlx::query(
-        "UPDATE uc_external_locations SET name=COALESCE($1,name), url=COALESCE($2,url), comment=COALESCE($3,comment), owner=COALESCE($4,owner), credential_id=COALESCE($5,credential_id), updated_at=$6, updated_by=$7 WHERE id=$8"
+    external_location::update(
+        &state.pool,
+        existing.id,
+        req.new_name.as_deref(),
+        req.url.as_deref(),
+        req.comment.as_deref(),
+        req.owner.as_deref(),
+        new_cred_id,
+        now,
+        auth_sub(&state, &claims),
     )
-    .bind(req.new_name.as_deref())
-    .bind(req.url.as_deref())
-    .bind(req.comment.as_deref())
-    .bind(req.owner.as_deref())
-    .bind(new_cred_id)
-    .bind(now)
-    .bind(auth_sub(&state, &claims))
-    .bind(existing.id)
-    .execute(state.pool.as_ref()).await.map_err(crate::db_err)?;
+    .await?;
     let updated = external_location::get_by_name(&state.pool, effective_name).await?;
     // Get credential name for response
     let cred = uc_db::repos::credential::get_by_id(&state.pool, updated.credential_id).await?;

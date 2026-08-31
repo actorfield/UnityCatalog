@@ -1,4 +1,5 @@
 use crate::{models::external_location::ExternalLocationRow, pool::AnyPool};
+use uuid::Uuid;
 use uc_errors::{ErrorCode, UcError};
 
 pub async fn create(
@@ -90,4 +91,36 @@ pub async fn find_by_path_prefix(
             "SELECT * FROM uc_external_locations WHERE $1 LIKE (url || '%') ORDER BY LENGTH(url) DESC LIMIT 1",
         )
         .bind(path).fetch_optional(pool).await.map_err(crate::sqlx_err)
+}
+
+/// Patch an external location in place. Lifted out of the uc-api handler.
+#[allow(clippy::too_many_arguments)]
+pub async fn update(
+    pool: &AnyPool,
+    id: Uuid,
+    new_name: Option<&str>,
+    url: Option<&str>,
+    comment: Option<&str>,
+    owner: Option<&str>,
+    credential_id: Option<Uuid>,
+    updated_at: i64,
+    updated_by: Option<&str>,
+) -> Result<(), UcError> {
+    sqlx::query(
+        "UPDATE uc_external_locations SET name=COALESCE($1,name), url=COALESCE($2,url), \
+         comment=COALESCE($3,comment), owner=COALESCE($4,owner), \
+         credential_id=COALESCE($5,credential_id), updated_at=$6, updated_by=$7 WHERE id=$8",
+    )
+    .bind(new_name)
+    .bind(url)
+    .bind(comment)
+    .bind(owner)
+    .bind(credential_id)
+    .bind(updated_at)
+    .bind(updated_by)
+    .bind(id)
+    .execute(pool)
+    .await
+    .map_err(crate::sqlx_err)?;
+    Ok(())
 }

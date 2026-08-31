@@ -125,17 +125,17 @@ pub async fn update(
         .aws_iam_role
         .as_ref()
         .map(|r| serde_json::to_string(r).unwrap_or_default());
-    sqlx::query(
-        "UPDATE uc_credentials SET name=COALESCE($1,name), comment=COALESCE($2,comment), owner=COALESCE($3,owner), credential=COALESCE($4,credential), updated_at=$5, updated_by=$6 WHERE id=$7"
+    credential::update(
+        &state.pool,
+        existing.id,
+        req.new_name.as_deref(),
+        req.comment.as_deref(),
+        req.owner.as_deref(),
+        new_credential_json.as_deref(),
+        now,
+        auth_sub(&state, &claims),
     )
-    .bind(req.new_name.as_deref())
-    .bind(req.comment.as_deref())
-    .bind(req.owner.as_deref())
-    .bind(new_credential_json.as_deref())
-    .bind(now)
-    .bind(auth_sub(&state, &claims))
-    .bind(existing.id)
-    .execute(state.pool.as_ref()).await.map_err(crate::db_err)?;
+    .await?;
     let updated = credential::get_by_name(&state.pool, effective_name).await?;
     Ok(Json(to_cred_info(updated)))
 }

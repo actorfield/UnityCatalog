@@ -191,3 +191,126 @@ pub async fn delete_version(store: &Store, model_id: Uuid, version: i32) -> Resu
         })
         .await
 }
+
+/// Patch a registered model in place. `None` leaves a field alone.
+pub async fn update_model(
+    store: &Store,
+    id: Uuid,
+    new_name: Option<&str>,
+    comment: Option<&str>,
+    owner: Option<&str>,
+    updated_at: i64,
+    updated_by: Option<&str>,
+) -> Result<(), UcError> {
+    store
+        .commit("UPDATE MODEL", |snap| {
+            // Zero rows matched is success in the SQL; preserved.
+            let Some(current) = snap.get(EntityKind::RegisteredModel, id) else {
+                return Ok((vec![], ()));
+            };
+            let mut row = model_of(current)?;
+
+            if let Some(target) = new_name {
+                if target != row.name
+                    && snap
+                        .get_by_natural_key(EntityKind::RegisteredModel, &nk(row.schema_id, target))
+                        .is_some()
+                {
+                    return Err(UcError::new(
+                        ErrorCode::ResourceAlreadyExists,
+                        format!("Model '{}' already exists", target),
+                    ));
+                }
+                row.name = target.to_string();
+            }
+            if let Some(c) = comment {
+                row.comment = Some(c.to_string());
+            }
+            if let Some(o) = owner {
+                row.owner = Some(o.to_string());
+            }
+            row.updated_at = Some(updated_at);
+            row.updated_by = updated_by.map(str::to_owned);
+
+            let body = serde_json::to_value(&row)
+                .map_err(|e| UcError::new(ErrorCode::Internal, e.to_string()))?;
+            Ok((
+                vec![Action::Upsert { kind: EntityKind::RegisteredModel, id, body }],
+                (),
+            ))
+        })
+        .await
+}
+
+pub async fn set_max_version(store: &Store, id: Uuid, next: i32) -> Result<(), UcError> {
+    store
+        .commit("SET MAX VERSION", |snap| {
+            let Some(current) = snap.get(EntityKind::RegisteredModel, id) else {
+                return Ok((vec![], ()));
+            };
+            let mut row = model_of(current)?;
+            row.max_version_number = Some(next);
+            let body = serde_json::to_value(&row)
+                .map_err(|e| UcError::new(ErrorCode::Internal, e.to_string()))?;
+            Ok((
+                vec![Action::Upsert { kind: EntityKind::RegisteredModel, id, body }],
+                (),
+            ))
+        })
+        .await
+}
+
+/// All versions of a model, ordered by version.
+pub async fn list_versions(
+    store: &Store,
+    model_id: Uuid,
+) -> Result<Vec<ModelVersionRow>, UcError> {
+    let snap = store.snapshot().await;
+    versions_of(&snap, model_id)
+}
+
+pub async fn update_version(
+    store: &Store,
+    id: Uuid,
+    comment: Option<&str>,
+    updated_at: i64,
+    updated_by: Option<&str>,
+) -> Result<(), UcError> {
+    store
+        .commit("UPDATE MODEL VERSION", |snap| {
+            let Some(current) = snap.get(EntityKind::ModelVersion, id) else {
+                return Ok((vec![], ()));
+            };
+            let mut row = version_of(current)?;
+            if let Some(c) = comment {
+                row.comment = Some(c.to_string());
+            }
+            row.updated_at = Some(updated_at);
+            row.updated_by = updated_by.map(str::to_owned);
+            let body = serde_json::to_value(&row)
+                .map_err(|e| UcError::new(ErrorCode::Internal, e.to_string()))?;
+            Ok((
+                vec![Action::Upsert { kind: EntityKind::ModelVersion, id, body }],
+                (),
+            ))
+        })
+        .await
+}
+
+pub async fn set_version_status(store: &Store, id: Uuid, status: &str) -> Result<(), UcError> {
+    store
+        .commit("SET MODEL VERSION STATUS", |snap| {
+            let Some(current) = snap.get(EntityKind::ModelVersion, id) else {
+                return Ok((vec![], ()));
+            };
+            let mut row = version_of(current)?;
+            row.status = Some(status.to_string());
+            let body = serde_json::to_value(&row)
+                .map_err(|e| UcError::new(ErrorCode::Internal, e.to_string()))?;
+            Ok((
+                vec![Action::Upsert { kind: EntityKind::ModelVersion, id, body }],
+                (),
+            ))
+        })
+        .await
+}

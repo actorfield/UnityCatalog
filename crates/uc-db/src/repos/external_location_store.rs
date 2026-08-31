@@ -4,6 +4,7 @@
 use crate::models::external_location::ExternalLocationRow;
 use crate::store::action::{Action, EntityKind};
 use crate::store::Store;
+use uuid::Uuid;
 use uc_errors::{ErrorCode, UcError};
 
 fn row_of(v: &serde_json::Value) -> Result<ExternalLocationRow, UcError> {
@@ -123,4 +124,67 @@ pub async fn find_by_path_prefix(
             .then_with(|| a.id.cmp(&b.id))
     });
     Ok(candidates.into_iter().next())
+}
+
+/// Patch an external location in place. `None` leaves a field alone.
+#[allow(clippy::too_many_arguments)]
+pub async fn update(
+    store: &Store,
+    id: Uuid,
+    new_name: Option<&str>,
+    url: Option<&str>,
+    comment: Option<&str>,
+    owner: Option<&str>,
+    credential_id: Option<Uuid>,
+    updated_at: i64,
+    updated_by: Option<&str>,
+) -> Result<(), UcError> {
+    store
+        .commit("UPDATE EXTERNAL LOCATION", |snap| {
+            // Zero rows matched is success in the SQL; preserved.
+            let Some(current) = snap.get(EntityKind::ExternalLocation, id) else {
+                return Ok((vec![], ()));
+            };
+            let mut row = row_of(current)?;
+
+            if let Some(target) = new_name {
+                if target != row.name
+                    && snap
+                        .get_by_natural_key(EntityKind::ExternalLocation, target)
+                        .is_some()
+                {
+                    return Err(UcError::new(
+                        ErrorCode::ExternalLocationAlreadyExists,
+                        format!("External location '{}' already exists", target),
+                    ));
+                }
+                row.name = target.to_string();
+            }
+            if let Some(u) = url {
+                row.url = u.to_string();
+            }
+            if let Some(c) = comment {
+                row.comment = Some(c.to_string());
+            }
+            if let Some(o) = owner {
+                row.owner = Some(o.to_string());
+            }
+            if let Some(c) = credential_id {
+                row.credential_id = c;
+            }
+            row.updated_at = Some(updated_at);
+            row.updated_by = updated_by.map(str::to_owned);
+
+            let body = serde_json::to_value(&row)
+                .map_err(|e| UcError::new(ErrorCode::Internal, e.to_string()))?;
+            Ok((
+                vec![Action::Upsert {
+                    kind: EntityKind::ExternalLocation,
+                    id,
+                    body,
+                }],
+                (),
+            ))
+        })
+        .await
 }
