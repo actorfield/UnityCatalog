@@ -159,6 +159,42 @@ Keys move to `_keys.json` via the same conditional create — first boot is a
 race between replicas, and PUT-if-absent makes the loser adopt the winner's key
 instead of generating its own.
 
+## Rejected: Raft
+
+Raft would mean running a consensus protocol on top of a system that already
+provides one. `If-None-Match` on S3 is a linearizable compare-and-swap backed by
+AWS's own replicated log; the object store *is* the consensus, and paying for a
+second one buys nothing.
+
+It also defeats the goal. Raft needs durable local state (log, term, vote) and
+stable node identity for membership — so it would reintroduce the PVC and add a
+StatefulSet, having set out to delete a PVC. Quorum means at least three
+uc-server replicas per org where there is currently one at 100m/128Mi, and
+writes would become unavailable below quorum, whereas a single pod against S3
+works fine and inherits the object store's durability.
+
+Raft would be right if writes needed single-digit-millisecond latency, or if the
+object store could not do conditional writes. Neither holds here.
+
+## Open question: write serialisation on the delta-commit path
+
+The honest cost of one global log: every write to an org serialises through a
+single version counter, at one S3 round trip each. For catalog CRUD that is
+irrelevant — humans create schemas.
+
+`uc_delta_commits` is different. It is the hot path: every Delta table commit in
+the org hits it. `UNIQUE(table_id, commit_version)` lets SQLite accept
+concurrent commits to *different* tables today, and a single global log would
+not — a real concurrency regression, not a wash.
+
+The fix is partitioning, not consensus: give delta commits their own log stream
+per table (`_uc_log/tables/{table_id}/NNN.json`), which is exactly what Delta
+itself does — one `_delta_log` per table. The natural key is already partitioned
+by `table_id`, so the constraint survives the split intact.
+
+Worth deciding before step 4 (porting delta_api), because it changes the store
+API from one log to a set of them. Not urgent for steps 1-3.
+
 ## Open question: read freshness
 
 Once there is more than one replica, replica B serves stale reads until it
