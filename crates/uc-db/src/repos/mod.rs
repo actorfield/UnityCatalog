@@ -1,4 +1,5 @@
 pub mod catalog;
+pub mod catalog_store;
 pub mod credential;
 pub mod delta;
 pub mod external_location;

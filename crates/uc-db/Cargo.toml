@@ -14,6 +14,8 @@ uc-errors = { path = "../uc-errors" }
 uc-types = { path = "../uc-types" }
 uc-openapi = { path = "../uc-openapi" }
 sqlx = { workspace = true }
+tokio = { workspace = true }
+async-trait = { workspace = true }
 uuid = { workspace = true }
 chrono = { workspace = true }
 serde = { workspace = true }

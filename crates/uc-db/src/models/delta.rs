@@ -1,7 +1,8 @@
+use serde::{Deserialize, Serialize};
 use sqlx::FromRow;
 use uuid::Uuid;
 
-#[derive(Debug, Clone, FromRow)]
+#[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
 pub struct DeltaCommitRow {
     pub id: Uuid,
     pub table_id: Uuid,

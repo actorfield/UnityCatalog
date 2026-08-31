@@ -1,7 +1,8 @@
+use serde::{Deserialize, Serialize};
 use sqlx::FromRow;
 use uuid::Uuid;
 
-#[derive(Debug, Clone, FromRow)]
+#[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
 pub struct SchemaRow {
     pub id: Uuid,
     pub catalog_id: Uuid,

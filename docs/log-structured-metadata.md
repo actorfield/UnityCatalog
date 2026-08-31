@@ -42,15 +42,44 @@ can be a derived export rather than the primary store.
 
 ## Layout
 
+Modelled directly on `_delta_log`:
+
     <storage_root>/_uc_log/
-      00000000000000000001.json         one commit = one file = a list of actions
+      00000000000000000001.json         JSONL commit: commitInfo + one action/line
       00000000000000000002.json
       ...
       00000000000000000200.checkpoint.json
-      _last_checkpoint                  {"version": 200}  (advisory pointer)
+      _last_checkpoint                  {"version": 200, "size": 1483}
       _keys.json                        JWT signing keypair, conditionally created
 
 20-digit zero-padded versions so lexicographic LIST order equals numeric order.
+
+Commit files are **JSONL**, not a JSON array — same as Delta, which also keeps
+the `.json` extension despite the newline-delimited contents. Following that
+naming means anyone who can read `_delta_log` can read `_uc_log` unprompted.
+
+    {"commitInfo":{"format":1,"timestamp":1756...,"operation":"CREATE CATALOG"}}
+    {"upsert":{"kind":"catalog","id":"018f...","body":{...}}}
+    {"remove":{"kind":"schema","id":"018f..."}}
+
+`commitInfo` first, as in Delta, carrying provenance only — replay ignores it,
+so it can be extended without a format bump. Actions are externally tagged
+single-key objects (`{"upsert": ...}`), mirroring Delta's `{"add": ...}` /
+`{"remove": ...}`; that is serde's default enum encoding, so it costs nothing
+and keeps the log greppable by action type.
+
+JSONL rather than one JSON document because a commit can be applied line by line
+without holding the file in memory, a truncated trailing line is detectable
+where a truncated array is not, and the line count is the action count that
+`_last_checkpoint.size` reports.
+
+Checkpoints are JSONL too — a state dump of `upsert` lines only, since a
+checkpoint is state rather than history and a deletion is represented by
+absence. Delta uses Parquet here; JSONL keeps one parser on the boot path, and
+UC metadata is nowhere near the size that motivates columnar checkpoints.
+Encoding is deterministic (sorted by kind then id) so two replicas checkpointing
+the same version write identical bytes, which is what makes `size` a usable
+truncation guard.
 
 ## Commit protocol
 

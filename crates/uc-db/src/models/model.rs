@@ -1,7 +1,8 @@
+use serde::{Deserialize, Serialize};
 use sqlx::FromRow;
 use uuid::Uuid;
 
-#[derive(Debug, Clone, FromRow)]
+#[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
 pub struct RegisteredModelRow {
     pub id: Uuid,
     pub schema_id: Uuid,
@@ -16,7 +17,7 @@ pub struct RegisteredModelRow {
     pub max_version_number: Option<i32>,
 }
 
-#[derive(Debug, Clone, FromRow)]
+#[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
 pub struct ModelVersionRow {
     pub id: Uuid,
     pub registered_model_id: Uuid,

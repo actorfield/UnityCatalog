@@ -42,7 +42,7 @@ pub async fn create(
     };
 
     store
-        .commit(|snap| {
+        .commit("CREATE CATALOG", |snap| {
             // Re-evaluated on every attempt. This is where the UNIQUE(name)
             // constraint now lives, and why a lost race must re-run rather
             // than blindly retry the PUT.
@@ -118,7 +118,7 @@ pub async fn update(
     updated_at: i64,
 ) -> Result<CatalogRow, UcError> {
     store
-        .commit(|snap| {
+        .commit("UPDATE CATALOG", |snap| {
             let current = snap
                 .get_by_natural_key(EntityKind::Catalog, name)
                 .ok_or_else(|| {
@@ -165,7 +165,7 @@ pub async fn update(
 
 pub async fn delete(store: &Store, name: &str) -> Result<(), UcError> {
     store
-        .commit(|snap| {
+        .commit("DROP CATALOG", |snap| {
             let current = snap
                 .get_by_natural_key(EntityKind::Catalog, name)
                 .ok_or_else(|| {
@@ -180,7 +180,7 @@ pub async fn delete(store: &Store, name: &str) -> Result<(), UcError> {
             // Adding cascade here would be a behaviour change disguised as a
             // port. See docs/log-structured-metadata.md.
             Ok((
-                vec![Action::Delete { kind: EntityKind::Catalog, id: row.id }],
+                vec![Action::Remove { kind: EntityKind::Catalog, id: row.id }],
                 (),
             ))
         })

@@ -1,7 +1,8 @@
+use serde::{Deserialize, Serialize};
 use sqlx::FromRow;
 use uuid::Uuid;
 
-#[derive(Debug, Clone, FromRow)]
+#[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
 pub struct FunctionRow {
     pub id: Uuid,
     pub schema_id: Uuid,
@@ -25,7 +26,7 @@ pub struct FunctionRow {
     pub specific_name: Option<String>,
 }
 
-#[derive(Debug, Clone, FromRow)]
+#[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
 pub struct FunctionParamRow {
     pub id: Uuid,
     pub function_id: Uuid,

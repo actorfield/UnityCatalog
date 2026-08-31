@@ -1,7 +1,8 @@
+use serde::{Deserialize, Serialize};
 use sqlx::FromRow;
 use uuid::Uuid;
 
-#[derive(Debug, Clone, FromRow)]
+#[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
 pub struct TableRow {
     pub id: Uuid,
     pub schema_id: Uuid,
@@ -22,7 +23,7 @@ pub struct TableRow {
     pub uniform_iceberg_converted_delta_timestamp: Option<i64>,
 }
 
-#[derive(Debug, Clone, FromRow)]
+#[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
 pub struct ColumnRow {
     pub id: Uuid,
     pub table_id: Uuid,
