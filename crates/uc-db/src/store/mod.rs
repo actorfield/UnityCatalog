@@ -5,6 +5,7 @@
 //! the ~262 call sites in uc-api compile untouched.
 
 pub mod action;
+pub mod delta_log;
 pub mod log;
 
 #[cfg(test)]
@@ -192,12 +193,16 @@ impl Snapshot {
 pub struct Store {
     log: Arc<dyn ObjectLog>,
     state: RwLock<Snapshot>,
+    /// Delta commits live in their own per-table logs rather than in `state`.
+    /// See store::delta_log for why the partition is both safe and necessary.
+    pub delta: delta_log::DeltaLog,
 }
 
 impl Store {
     /// Replay the log into memory. Called once at startup, before serving.
     pub async fn open(log: Arc<dyn ObjectLog>) -> Result<Self, UcError> {
         let store = Self {
+            delta: delta_log::DeltaLog::new(log.clone()),
             log,
             state: RwLock::new(Snapshot::default()),
         };

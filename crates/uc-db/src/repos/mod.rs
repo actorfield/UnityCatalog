@@ -15,12 +15,11 @@ macro_rules! repo {
 
 repo!(catalog, "catalog_store.rs");
 repo!(schema, "schema_store.rs");
+repo!(delta, "delta_store.rs");
 
 // Not yet ported — SQL only, so the logstore build does not yet link them.
 #[cfg(not(feature = "logstore"))]
 pub mod credential;
-#[cfg(not(feature = "logstore"))]
-pub mod delta;
 #[cfg(not(feature = "logstore"))]
 pub mod external_location;
 #[cfg(not(feature = "logstore"))]

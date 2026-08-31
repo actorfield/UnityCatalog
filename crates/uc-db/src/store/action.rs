@@ -182,11 +182,20 @@ pub fn checkpoint_key(version: u64) -> String {
 pub const LAST_CHECKPOINT_KEY: &str = "_uc_log/_last_checkpoint";
 pub const KEYS_KEY: &str = "_uc_log/_keys.json";
 
-/// Parse a version back out of a commit key. Returns None for checkpoints and
-/// anything else living under the prefix.
+/// Parse a version back out of a main-log commit key.
+///
+/// Returns None for checkpoints and for anything nested deeper than
+/// `_uc_log/NNN.json`. The nesting check is load-bearing: per-table Delta
+/// partitions live at `_uc_log/tables/{table_id}/NNN.json`, whose final
+/// segment parses as a version just as well. Matching on the last path segment
+/// alone would let a table's commit stream be replayed into the metastore
+/// snapshot as if it were a metadata commit.
 pub fn version_from_key(key: &str) -> Option<u64> {
-    let name = key.rsplit('/').next()?;
-    let stem = name.strip_suffix(".json")?;
+    let rest = key.strip_prefix("_uc_log/")?;
+    if rest.contains('/') {
+        return None;
+    }
+    let stem = rest.strip_suffix(".json")?;
     if stem.ends_with(".checkpoint") {
         return None;
     }
@@ -215,6 +224,17 @@ mod tests {
     fn checkpoints_are_not_mistaken_for_commits() {
         assert_eq!(version_from_key(&commit_key(7)), Some(7));
         assert_eq!(version_from_key(&checkpoint_key(7)), None);
+    }
+
+    #[test]
+    fn per_table_partitions_are_not_mistaken_for_main_log_commits() {
+        let nested = format!("_uc_log/tables/{}/{:020}.json", Uuid::nil(), 7);
+        assert_eq!(
+            version_from_key(&nested),
+            None,
+            "a table's delta commit must never replay into the metastore snapshot"
+        );
+        assert_eq!(version_from_key(&commit_key(7)), Some(7));
     }
 
     #[test]

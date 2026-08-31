@@ -176,24 +176,55 @@ works fine and inherits the object store's durability.
 Raft would be right if writes needed single-digit-millisecond latency, or if the
 object store could not do conditional writes. Neither holds here.
 
-## Open question: write serialisation on the delta-commit path
+## Partitioning (decided: per-table delta logs)
 
-The honest cost of one global log: every write to an org serialises through a
-single version counter, at one S3 round trip each. For catalog CRUD that is
-irrelevant — humans create schemas.
+One global log per org would serialise every write through a single version
+counter. Two independent problems, both pointing the same way:
 
-`uc_delta_commits` is different. It is the hot path: every Delta table commit in
-the org hits it. `UNIQUE(table_id, commit_version)` lets SQLite accept
-concurrent commits to *different* tables today, and a single global log would
-not — a real concurrency regression, not a wash.
+  - **Write concurrency.** Catalog CRUD does not care — humans create schemas.
+    But every Delta commit in the org lands in `uc_delta_commits`, and SQLite
+    accepts concurrent commits to *different* tables today via
+    UNIQUE(table_id, commit_version). A shared log would not: a regression, not
+    a wash.
+  - **Boot cost.** `uc_delta_commits` is the only unbounded-growth entity —
+    every commit to every table appends forever. Left in the main log it would
+    dominate replay and every checkpoint, making startup scale with total
+    commit history rather than with schema size. This is the larger problem of
+    the two.
 
-The fix is partitioning, not consensus: give delta commits their own log stream
-per table (`_uc_log/tables/{table_id}/NNN.json`), which is exactly what Delta
-itself does — one `_delta_log` per table. The natural key is already partitioned
-by `table_id`, so the constraint survives the split intact.
+So Delta commits are partitioned out, one stream per table:
 
-Worth deciding before step 4 (porting delta_api), because it changes the store
-API from one log to a set of them. Not urgent for steps 1-3.
+    _uc_log/tables/{table_id}/00000000000000000007.json
+
+which is what Delta itself does — one `_delta_log` per table, not one per
+metastore.
+
+**The rule for where to cut.** A partition boundary is only safe if no
+invariant spans it. UNIQUE(table_id, commit_version) lives entirely inside one
+table's stream, so it survives the split intact. Catalogs, schemas, tables and
+volumes stay in the shared log: they are low-write, and their invariants
+interlock (a schema's uniqueness is scoped by its catalog).
+
+**The payoff is that the partition collapses the mechanism.** `commit_version`
+*is* the log version, so the constraint and the object key are the same thing.
+`insert` becomes a single conditional PUT — no snapshot read, no commit loop, no
+retry, no in-memory state for commit history at all — and a conflict arrives as
+`AlreadyExists` rather than as something that has to be detected. Partitioning
+made this path simpler than the unpartitioned version, not more complex.
+
+`latest_version` keeps a per-table hint so the common case is a short listing
+rather than paging the whole history. The hint is never trusted: appends are
+conditional, so a stale hint costs one rejected PUT and a re-list, never
+correctness. That is what lets it be a plain cache with no cross-replica
+invalidation protocol.
+
+**One sharp edge.** Partition keys sit under the same `_uc_log/` prefix as
+metastore commits, and `tables/{id}/00000000000000000007.json` has a final
+segment that parses as a version perfectly well. `action::version_from_key`
+must reject nested keys, or a table's commit stream replays into the metastore
+snapshot as metadata. Covered by
+`per_table_partitions_are_not_mistaken_for_main_log_commits` and
+`delta_partitions_do_not_corrupt_metastore_replay`.
 
 ## Open question: read freshness
 
@@ -210,7 +241,7 @@ worth choosing now — but worth not pretending multi-replica arrives for free.
 
   1. `store/` module: actions, log, replay, checkpoint, in-memory indices  <- sketched
   2. port repos/catalog.rs as the worked example                           <- sketched
-  3. port remaining 12 repo modules
+  3. port remaining 10 repo modules
   4. port the 19 direct sqlx sites in uc-api
   5. casbin policy off the pool
   6. keys to _keys.json

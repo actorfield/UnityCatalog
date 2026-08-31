@@ -299,3 +299,118 @@ async fn a_gap_in_the_log_is_refused_rather_than_partially_applied() {
         "a hole in the log must fail startup, not silently skip: {err:?}"
     );
 }
+
+// ── partitioned delta logs ──────────────────────────────────────────────────
+
+fn delta_row(table_id: Uuid, version: i64) -> Vec<u8> {
+    serde_json::to_vec(&serde_json::json!({
+        "table_id": table_id,
+        "commit_version": version,
+    }))
+    .unwrap()
+}
+
+#[tokio::test]
+async fn a_delta_commit_conflict_is_the_object_key_not_a_constraint() {
+    let log = Arc::new(MemLog::default());
+    let store = Store::open(log).await.unwrap();
+    let t = Uuid::new_v4();
+
+    store.delta.append(t, 0, delta_row(t, 0)).await.unwrap();
+    let err = store.delta.append(t, 0, delta_row(t, 0)).await.unwrap_err();
+    assert_eq!(err.code, ErrorCode::CommitVersionConflict);
+}
+
+/// The point of partitioning: commits to different tables do not contend, and
+/// neither advances the metastore log.
+#[tokio::test]
+async fn commits_to_different_tables_do_not_serialise_against_each_other() {
+    let log = Arc::new(MemLog::default());
+    let store = Store::open(log.clone()).await.unwrap();
+    let (a, b) = (Uuid::new_v4(), Uuid::new_v4());
+
+    for v in 0..5 {
+        store.delta.append(a, v, delta_row(a, v)).await.unwrap();
+        store.delta.append(b, v, delta_row(b, v)).await.unwrap();
+    }
+
+    assert_eq!(store.delta.latest_version(a).await.unwrap(), Some(4));
+    assert_eq!(store.delta.latest_version(b).await.unwrap(), Some(4));
+    assert_eq!(
+        store.snapshot().await.version,
+        0,
+        "delta commits must not touch the metastore log"
+    );
+
+    // And a cold replica is unaffected by the volume of commit history.
+    let cold = Store::open(log).await.unwrap();
+    assert_eq!(cold.snapshot().await.version, 0);
+    assert_eq!(cold.delta.latest_version(a).await.unwrap(), Some(4));
+}
+
+#[tokio::test]
+async fn version_ranges_are_inclusive_at_both_ends() {
+    let log = Arc::new(MemLog::default());
+    let store = Store::open(log).await.unwrap();
+    let t = Uuid::new_v4();
+    for v in 0..10 {
+        store.delta.append(t, v, delta_row(t, v)).await.unwrap();
+    }
+
+    assert_eq!(
+        store.delta.versions(t, Some(3), Some(6)).await.unwrap(),
+        vec![3, 4, 5, 6],
+        "matches SQL's commit_version >= $2 AND commit_version <= $3"
+    );
+    assert_eq!(store.delta.versions(t, None, None).await.unwrap().len(), 10);
+    assert_eq!(store.delta.versions(t, Some(0), None).await.unwrap().len(), 10);
+}
+
+#[tokio::test]
+async fn a_table_with_no_commits_has_no_latest_version() {
+    let log = Arc::new(MemLog::default());
+    let store = Store::open(log).await.unwrap();
+    assert_eq!(store.delta.latest_version(Uuid::new_v4()).await.unwrap(), None);
+}
+
+/// The hint is an optimisation, never a source of truth: a replica that never
+/// saw another's commits must still find them.
+#[tokio::test]
+async fn a_stale_latest_hint_is_corrected_by_listing() {
+    let log = Arc::new(MemLog::default());
+    let a = Store::open(log.clone()).await.unwrap();
+    let b = Store::open(log).await.unwrap();
+    let t = Uuid::new_v4();
+
+    a.delta.append(t, 0, delta_row(t, 0)).await.unwrap();
+    assert_eq!(b.delta.latest_version(t).await.unwrap(), Some(0));
+
+    // b now holds hint=0; a commits further without telling it.
+    a.delta.append(t, 1, delta_row(t, 1)).await.unwrap();
+    a.delta.append(t, 2, delta_row(t, 2)).await.unwrap();
+    assert_eq!(
+        b.delta.latest_version(t).await.unwrap(),
+        Some(2),
+        "a stale hint must be corrected, not trusted"
+    );
+}
+
+/// Partition keys share the `_uc_log/` prefix with metastore commits. If the
+/// main replay did not exclude nested keys, a table's commits would be applied
+/// as metadata actions.
+#[tokio::test]
+async fn delta_partitions_do_not_corrupt_metastore_replay() {
+    let log = Arc::new(MemLog::default());
+    let store = Store::open(log.clone()).await.unwrap();
+    put_catalog(&store, "alpha").await.unwrap();
+
+    let t = Uuid::new_v4();
+    for v in 0..3 {
+        store.delta.append(t, v, delta_row(t, v)).await.unwrap();
+    }
+
+    let cold = Store::open(log).await.unwrap();
+    let snap = cold.snapshot().await;
+    assert_eq!(snap.version, 1, "only the catalog commit counts");
+    assert!(snap.get_by_natural_key(EntityKind::Catalog, "alpha").is_some());
+}
