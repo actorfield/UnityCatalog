@@ -121,15 +121,9 @@ pub async fn list(
             .map_err(crate::sqlx_err)?
     };
 
-    let next_token = if rows.len() as i64 > max_results {
-        rows.get(max_results as usize - 1).map(|r| r.name.clone())
-    } else {
-        None
-    };
-    Ok((
-        rows.into_iter().take(max_results as usize).collect(),
-        next_token,
-    ))
+    let (rows, next_token) =
+        crate::pagination::page(rows, max_results, |r| r.name.clone());
+    Ok((rows, next_token))
 }
 
 pub async fn update(

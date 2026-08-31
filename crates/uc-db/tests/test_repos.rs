@@ -629,3 +629,49 @@ async fn delta_commit_insert_list_latest() {
     let err = result.unwrap_err();
     assert_eq!(err.code, uc_errors::ErrorCode::CommitVersionConflict);
 }
+
+
+// ── pagination edge cases ──────────────────────────────────────────────────
+
+/// `max_results = 0` used to compute `rows.get(0 - 1)`: a panic in debug, and
+/// in release a wrap to usize::MAX that returned an empty page with no token,
+/// silently ending pagination for the caller.
+#[tokio::test]
+async fn listing_with_a_non_positive_limit_does_not_underflow() {
+    let pool = setup_pool().await;
+    for name in ["a", "b", "c"] {
+        catalog::create(&pool, Uuid::now_v7(), name, None, None, None, None, now())
+            .await
+            .unwrap();
+    }
+
+    for limit in [0i64, -1] {
+        let (rows, token) = catalog::list(&pool, None, limit).await.unwrap();
+        assert!(rows.is_empty(), "limit {limit} must yield no rows");
+        assert_eq!(token, None, "limit {limit} must yield no token");
+    }
+}
+
+/// The token points at the last row of the page just returned, so the next
+/// request resumes immediately after it — no row skipped, none repeated.
+#[tokio::test]
+async fn paging_through_a_catalog_list_visits_every_row_once() {
+    let pool = setup_pool().await;
+    for name in ["a", "b", "c", "d", "e"] {
+        catalog::create(&pool, Uuid::now_v7(), name, None, None, None, None, now())
+            .await
+            .unwrap();
+    }
+
+    let mut seen = Vec::new();
+    let mut token: Option<String> = None;
+    for _ in 0..10 {
+        let (rows, next) = catalog::list(&pool, token.as_deref(), 2).await.unwrap();
+        seen.extend(rows.into_iter().map(|r| r.name));
+        match next {
+            Some(t) => token = Some(t),
+            None => break,
+        }
+    }
+    assert_eq!(seen, vec!["a", "b", "c", "d", "e"]);
+}

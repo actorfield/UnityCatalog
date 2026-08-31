@@ -81,7 +81,9 @@ pub async fn list(
     State(state): State<AppState>,
     Query(params): Query<ListParams>,
 ) -> Result<Json<ListExternalLocationsResponse>, UcError> {
-    let max = params.max_results.unwrap_or(50).min(1000);
+    // A non-positive max_results means "unspecified", not "an empty page". It
+    // used to reach the repo layer and underflow there.
+    let max = params.max_results.filter(|n| *n > 0).unwrap_or(50).min(1000);
     let (rows, next_token) =
         external_location::list(&state.pool, params.page_token.as_deref(), max).await?;
     let mut external_locations = Vec::with_capacity(rows.len());

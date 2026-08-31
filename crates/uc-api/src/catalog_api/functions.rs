@@ -127,7 +127,9 @@ pub async fn list(
 ) -> Result<Json<ListFunctionsResponse>, UcError> {
     let schema =
         schema::get_by_full_name(&state.pool, &params.catalog_name, &params.schema_name).await?;
-    let max = params.max_results.unwrap_or(50).min(1000);
+    // A non-positive max_results means "unspecified", not "an empty page". It
+    // used to reach the repo layer and underflow there.
+    let max = params.max_results.filter(|n| *n > 0).unwrap_or(50).min(1000);
     let (rows, next_token) =
         function::list(&state.pool, schema.id, params.page_token.as_deref(), max).await?;
     // #1105: filter to only functions the caller can see when auth is enabled

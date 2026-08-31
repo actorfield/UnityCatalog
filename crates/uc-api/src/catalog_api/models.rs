@@ -102,7 +102,9 @@ pub async fn list_models(
     let cat = params.catalog_name.as_deref().unwrap_or("");
     let sch = params.schema_name.as_deref().unwrap_or("");
     let schema = schema::get_by_full_name(&state.pool, cat, sch).await?;
-    let max = params.max_results.unwrap_or(50).min(1000);
+    // A non-positive max_results means "unspecified", not "an empty page". It
+    // used to reach the repo layer and underflow there.
+    let max = params.max_results.filter(|n| *n > 0).unwrap_or(50).min(1000);
     let (rows, next_token) =
         model::list_models(&state.pool, schema.id, params.page_token.as_deref(), max).await?;
     // #1105: filter to only models the caller can see when auth is enabled

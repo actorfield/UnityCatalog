@@ -58,12 +58,9 @@ pub async fn list(
         .await
         .map_err(crate::sqlx_err)?
     };
-    let next = if rows.len() as i64 > max_results {
-        rows.get(max_results as usize - 1).map(|r| r.name.clone())
-    } else {
-        None
-    };
-    Ok((rows.into_iter().take(max_results as usize).collect(), next))
+    let (rows, next) =
+        crate::pagination::page(rows, max_results, |r| r.name.clone());
+    Ok((rows, next))
 }
 
 pub async fn delete(pool: &AnyPool, name: &str) -> Result<(), UcError> {

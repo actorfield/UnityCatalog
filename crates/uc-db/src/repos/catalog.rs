@@ -92,12 +92,7 @@ pub async fn list(
             .uc_err()?
     };
 
-    let next_token = if rows.len() as i64 > max_results {
-        rows.get(max_results as usize - 1).map(|r| r.name.clone())
-    } else {
-        None
-    };
-    let rows = rows.into_iter().take(max_results as usize).collect();
+    let (rows, next_token) = crate::pagination::page(rows, max_results, |r| r.name.clone());
     Ok((rows, next_token))
 }
 

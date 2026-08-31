@@ -89,18 +89,12 @@ pub async fn list(
         EntityKind::Table,
         &schema_prefix(schema_id),
         page_token,
-        max_results as usize + 1,
+        crate::pagination::over_fetch(max_results),
     );
     let rows: Vec<TableRow> = found.into_iter().map(table_of).collect::<Result<_, _>>()?;
-    let next_token = if rows.len() as i64 > max_results {
-        rows.get(max_results as usize - 1).map(|r| r.name.clone())
-    } else {
-        None
-    };
-    Ok((
-        rows.into_iter().take(max_results as usize).collect(),
-        next_token,
-    ))
+    let (rows, next_token) =
+        crate::pagination::page(rows, max_results, |r| r.name.clone());
+    Ok((rows, next_token))
 }
 
 pub async fn delete(store: &Store, id: Uuid) -> Result<(), UcError> {
