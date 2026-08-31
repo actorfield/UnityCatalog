@@ -102,3 +102,64 @@ pub async fn delete_for_entity(
         })
         .await
 }
+
+/// Upsert a single property, replacing any existing value for that key.
+///
+/// The SQL `INSERT OR REPLACE` allocates a fresh id on conflict; this keeps the
+/// existing row's id and changes only the value. Property ids are never
+/// surfaced by the API, and a stable id makes the log diff show a value change
+/// rather than a delete-plus-insert.
+pub async fn set(
+    store: &Store,
+    entity_id: Uuid,
+    entity_type: &str,
+    key: &str,
+    value: &str,
+) -> Result<(), UcError> {
+    let natural = format!("{}{}", prefix(entity_id, entity_type), key);
+    store
+        .commit("SET PROPERTY", |snap| {
+            let id = snap
+                .get_by_natural_key(EntityKind::Property, &natural)
+                .map(row_of)
+                .transpose()?
+                .map(|r| r.id)
+                .unwrap_or_else(Uuid::now_v7);
+            let row = PropertyRow {
+                id,
+                entity_id,
+                entity_type: entity_type.to_string(),
+                property_key: key.to_string(),
+                property_value: value.to_string(),
+            };
+            let body = serde_json::to_value(&row)
+                .map_err(|e| UcError::new(ErrorCode::Internal, e.to_string()))?;
+            Ok((
+                vec![Action::Upsert { kind: EntityKind::Property, id, body }],
+                (),
+            ))
+        })
+        .await
+}
+
+/// Delete one property by key. Deleting an absent key is not an error.
+pub async fn delete_key(
+    store: &Store,
+    entity_id: Uuid,
+    entity_type: &str,
+    key: &str,
+) -> Result<(), UcError> {
+    let natural = format!("{}{}", prefix(entity_id, entity_type), key);
+    store
+        .commit("UNSET PROPERTY", |snap| {
+            let Some(existing) = snap.get_by_natural_key(EntityKind::Property, &natural) else {
+                return Ok((vec![], ()));
+            };
+            let row = row_of(existing)?;
+            Ok((
+                vec![Action::Remove { kind: EntityKind::Property, id: row.id }],
+                (),
+            ))
+        })
+        .await
+}

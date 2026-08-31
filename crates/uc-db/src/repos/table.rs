@@ -169,3 +169,52 @@ pub async fn delete_columns(pool: &AnyPool, table_id: Uuid) -> Result<(), UcErro
         .map_err(crate::sqlx_err)?;
     Ok(())
 }
+
+/// Patch the fields the Delta commit handler updates in place. `None` leaves a
+/// field alone. Lifted out of delta_api/tables.rs, which issued these UPDATEs
+/// inline.
+#[allow(clippy::too_many_arguments)]
+pub async fn patch(
+    pool: &AnyPool,
+    id: Uuid,
+    column_count: Option<i32>,
+    comment: Option<&str>,
+    iceberg_version: Option<i64>,
+    iceberg_timestamp: Option<i64>,
+    updated_at: i64,
+) -> Result<(), UcError> {
+    sqlx::query(
+        "UPDATE uc_tables SET column_count=COALESCE($1,column_count), \
+         comment=COALESCE($2,comment), \
+         uniform_iceberg_converted_delta_version=COALESCE($3,uniform_iceberg_converted_delta_version), \
+         uniform_iceberg_converted_delta_timestamp=COALESCE($4,uniform_iceberg_converted_delta_timestamp), \
+         updated_at=$5 WHERE id=$6",
+    )
+    .bind(column_count)
+    .bind(comment)
+    .bind(iceberg_version)
+    .bind(iceberg_timestamp)
+    .bind(updated_at)
+    .bind(id)
+    .execute(pool)
+    .await
+    .map_err(crate::sqlx_err)?;
+    Ok(())
+}
+
+/// Rename a table. Lifted out of delta_api/tables.rs.
+pub async fn rename(
+    pool: &AnyPool,
+    id: Uuid,
+    new_name: &str,
+    updated_at: i64,
+) -> Result<(), UcError> {
+    sqlx::query("UPDATE uc_tables SET name=$1, updated_at=$2 WHERE id=$3")
+        .bind(new_name)
+        .bind(updated_at)
+        .bind(id)
+        .execute(pool)
+        .await
+        .map_err(crate::sqlx_err)?;
+    Ok(())
+}

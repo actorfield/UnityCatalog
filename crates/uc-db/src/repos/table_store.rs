@@ -167,3 +167,78 @@ pub async fn delete_columns(store: &Store, table_id: Uuid) -> Result<(), UcError
         })
         .await
 }
+
+/// Patch the fields the Delta commit handler updates in place. `None` leaves a
+/// field alone, matching COALESCE.
+#[allow(clippy::too_many_arguments)]
+pub async fn patch(
+    store: &Store,
+    id: Uuid,
+    column_count: Option<i32>,
+    comment: Option<&str>,
+    iceberg_version: Option<i64>,
+    iceberg_timestamp: Option<i64>,
+    updated_at: i64,
+) -> Result<(), UcError> {
+    store
+        .commit("ALTER TABLE", |snap| {
+            // Zero rows matched is success in the SQL; preserved.
+            let Some(current) = snap.get(EntityKind::Table, id) else {
+                return Ok((vec![], ()));
+            };
+            let mut row = table_of(current)?;
+            if let Some(c) = column_count {
+                row.column_count = Some(c);
+            }
+            if let Some(c) = comment {
+                row.comment = Some(c.to_string());
+            }
+            if let Some(v) = iceberg_version {
+                row.uniform_iceberg_converted_delta_version = Some(v);
+            }
+            if let Some(t) = iceberg_timestamp {
+                row.uniform_iceberg_converted_delta_timestamp = Some(t);
+            }
+            row.updated_at = Some(updated_at);
+            let body = serde_json::to_value(&row)
+                .map_err(|e| UcError::new(ErrorCode::Internal, e.to_string()))?;
+            Ok((vec![Action::Upsert { kind: EntityKind::Table, id, body }], ()))
+        })
+        .await
+}
+
+/// Rename a table.
+///
+/// The SQL issues a bare UPDATE, so renaming onto an occupied (schema_id, name)
+/// trips the UNIQUE constraint and surfaces as a 500. Returning the domain
+/// error instead is a deliberate change, consistent with the other renames.
+pub async fn rename(
+    store: &Store,
+    id: Uuid,
+    new_name: &str,
+    updated_at: i64,
+) -> Result<(), UcError> {
+    store
+        .commit("RENAME TABLE", |snap| {
+            let Some(current) = snap.get(EntityKind::Table, id) else {
+                return Ok((vec![], ()));
+            };
+            let mut row = table_of(current)?;
+            if new_name != row.name
+                && snap
+                    .get_by_natural_key(EntityKind::Table, &nk(row.schema_id, new_name))
+                    .is_some()
+            {
+                return Err(UcError::new(
+                    ErrorCode::TableAlreadyExists,
+                    format!("Table '{}' already exists", new_name),
+                ));
+            }
+            row.name = new_name.to_string();
+            row.updated_at = Some(updated_at);
+            let body = serde_json::to_value(&row)
+                .map_err(|e| UcError::new(ErrorCode::Internal, e.to_string()))?;
+            Ok((vec![Action::Upsert { kind: EntityKind::Table, id, body }], ()))
+        })
+        .await
+}

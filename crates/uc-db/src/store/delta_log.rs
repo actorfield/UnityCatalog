@@ -133,6 +133,55 @@ impl DeltaLog {
         self.log.get(&commit_key(table_id, version)).await
     }
 
+    /// Overwrite an existing commit object in place.
+    ///
+    /// Every other write here is a conditional create, which is what makes a
+    /// commit write-once and gives version N a single claimant. This is the one
+    /// exception, and it is narrow on purpose:
+    ///
+    ///   - The OCC guarantee is about *who first claimed version N*. That is
+    ///     settled the moment the object exists; changing its body afterwards
+    ///     cannot produce a second claimant, so nothing about concurrency
+    ///     control is weakened.
+    ///   - It must therefore never be used to change a field that takes part in
+    ///     identity or ordering -- `table_id` or `commit_version` -- or the
+    ///     object key and its contents would disagree and the log would lie.
+    ///   - There is no read-modify-write protection. Two concurrent callers can
+    ///     clobber each other, so the only safe use is an idempotent,
+    ///     monotonic change where last-write-wins converges. Setting a
+    ///     latched flag qualifies; incrementing a counter would not.
+    ///
+    /// A missing commit is a no-op, matching the SQL UPDATE that matched zero
+    /// rows and reported success.
+    pub async fn mutate_commit(
+        &self,
+        table_id: Uuid,
+        version: i64,
+        edit: impl FnOnce(&mut serde_json::Value),
+    ) -> Result<(), UcError> {
+        let key = commit_key(table_id, version);
+        let Some(bytes) = self.log.get(&key).await? else {
+            return Ok(());
+        };
+        let mut doc: serde_json::Value = serde_json::from_slice(&bytes).map_err(|e| {
+            UcError::new(ErrorCode::Internal, format!("corrupt delta commit {key}: {e}"))
+        })?;
+
+        let before = (doc.get("table_id").cloned(), doc.get("commit_version").cloned());
+        edit(&mut doc);
+        let after = (doc.get("table_id").cloned(), doc.get("commit_version").cloned());
+        if before != after {
+            return Err(UcError::new(
+                ErrorCode::Internal,
+                "delta commit edit changed table_id or commit_version, which are the object key",
+            ));
+        }
+
+        let body = serde_json::to_vec(&doc)
+            .map_err(|e| UcError::new(ErrorCode::Internal, e.to_string()))?;
+        self.log.put(&key, body).await
+    }
+
     /// Highest committed version, or None for a table with no commits.
     ///
     /// Consults the hint first, then confirms by listing forward from it. That

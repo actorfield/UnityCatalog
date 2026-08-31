@@ -58,3 +58,24 @@ pub async fn list_for_table(
 pub async fn latest_version(store: &Store, table_id: Uuid) -> Result<Option<i64>, UcError> {
     store.delta.latest_version(table_id).await
 }
+
+/// Flag the commit at `version` as the backfilled latest for its table.
+///
+/// This edits a commit object that is otherwise write-once. It is safe because
+/// the flag is a latch — false to true, idempotent, so concurrent setters
+/// converge — and because it touches no field that participates in the object
+/// key. See `DeltaLog::mutate_commit` for the full reasoning.
+///
+/// A missing commit is a no-op, matching the SQL UPDATE's zero rows matched.
+pub async fn mark_backfilled(
+    store: &Store,
+    table_id: Uuid,
+    version: i64,
+) -> Result<(), UcError> {
+    store
+        .delta
+        .mutate_commit(table_id, version, |doc| {
+            doc["is_backfilled_latest_commit"] = serde_json::Value::Bool(true);
+        })
+        .await
+}

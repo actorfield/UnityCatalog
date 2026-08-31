@@ -378,11 +378,38 @@ worth choosing now — but worth not pretending multi-replica arrives for free.
   1. `store/` module: actions, log, replay, checkpoint, in-memory indices  DONE
   2. port repos/catalog.rs as the worked example                           DONE
   3. port the remaining 12 repo modules                                    DONE
-  4. port the 19 direct sqlx sites in uc-api                               <- next
-  5. casbin policy off the pool
+  4. port the 19 direct sqlx sites in uc-api                               DONE
+  5. casbin policy off the pool                                            <- next
   6. keys to _keys.json
   7. drop PVC from k8s_effects.rs, pass --storage-root instead of --database-url
   8. rename AnyPool -> Store
+
+### uc-api no longer speaks SQL
+
+Step 4 removed the last `sqlx::query` from uc-api and with it the crate's `sqlx`
+dependency. That dependency is the enforcement: handlers now physically cannot
+reach past the repo layer, so nothing can quietly reintroduce a raw statement
+that only works on one backend.
+
+Nineteen inline statements became repo functions implemented on both backends —
+`property::set` / `delete_key`, `table::patch` / `rename`, `delta::mark_backfilled`,
+`credential::update`, `external_location::update`, and five on `model`.
+
+### One commit object is mutable, deliberately
+
+`delta::mark_backfilled` edits a commit object that conditional PUT otherwise
+makes write-once. `DeltaLog::mutate_commit` is the only overwrite path, and it
+is narrow on purpose:
+
+  - The OCC guarantee concerns *who first claimed version N*, which is settled
+    once the object exists. Editing the body afterwards cannot create a second
+    claimant, so concurrency control is untouched.
+  - It rejects any edit that changes `table_id` or `commit_version` — those are
+    the object key, and letting them drift would make the log lie about itself.
+  - There is no read-modify-write protection, so the only safe use is an
+    idempotent, monotonic change where last-write-wins converges. Setting a
+    latched flag qualifies; incrementing a counter would not. That constraint
+    is documented at the function, not assumed.
 
 ### How the port is checked
 

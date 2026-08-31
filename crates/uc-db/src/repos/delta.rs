@@ -57,3 +57,22 @@ pub async fn latest_version(pool: &AnyPool, table_id: Uuid) -> Result<Option<i64
             .map_err(crate::sqlx_err)?;
     Ok(row.map(|(v,)| v))
 }
+
+/// Flag the commit at `version` as the backfilled latest for its table.
+/// Lifted out of delta_api/tables.rs.
+pub async fn mark_backfilled(
+    pool: &AnyPool,
+    table_id: Uuid,
+    version: i64,
+) -> Result<(), UcError> {
+    sqlx::query(
+        "UPDATE uc_delta_commits SET is_backfilled_latest_commit=1 \
+         WHERE table_id=$1 AND commit_version=$2",
+    )
+    .bind(table_id)
+    .bind(version)
+    .execute(pool)
+    .await
+    .map_err(crate::sqlx_err)?;
+    Ok(())
+}

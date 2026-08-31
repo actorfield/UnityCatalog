@@ -208,97 +208,109 @@ pub async fn update_table(
             }
             DeltaTableUpdate::RemoveProperties { removals } => {
                 for key in removals {
-                    sqlx::query(
-                        "DELETE FROM uc_properties WHERE entity_id=$1 AND entity_type='table' AND property_key=$2"
-                    )
-                    .bind(row.id).bind(key)
-                    .execute(state.pool.as_ref()).await.map_err(crate::db_err)?;
+                    uc_db::repos::property::delete_key(&state.pool, row.id, "table", key).await?;
                 }
             }
             DeltaTableUpdate::SetColumns { columns } => {
                 // Persist the new column schema as JSON in uc_columns
                 let col_json = serde_json::to_string(columns).unwrap_or_default();
-                sqlx::query("UPDATE uc_tables SET column_count=$1, updated_at=$2 WHERE id=$3")
-                    .bind(columns.fields.len() as i32)
-                    .bind(now)
-                    .bind(row.id)
-                    .execute(state.pool.as_ref())
-                    .await
-                    .map_err(crate::db_err)?;
-                // Store schema JSON as a property for retrieval
-                sqlx::query(
-                    "INSERT OR REPLACE INTO uc_properties (id, entity_id, entity_type, property_key, property_value) VALUES ($1,$2,'table','__delta_schema__',$3)"
+                uc_db::repos::table::patch(
+                    &state.pool,
+                    row.id,
+                    Some(columns.fields.len() as i32),
+                    None,
+                    None,
+                    None,
+                    now,
                 )
-                .bind(Uuid::now_v7()).bind(row.id).bind(&col_json)
-                .execute(state.pool.as_ref()).await.map_err(crate::db_err)?;
+                .await?;
+                // Store schema JSON as a property for retrieval
+                uc_db::repos::property::set(
+                    &state.pool,
+                    row.id,
+                    "table",
+                    "__delta_schema__",
+                    &col_json,
+                )
+                .await?;
             }
             DeltaTableUpdate::SetTableComment { comment } => {
-                sqlx::query("UPDATE uc_tables SET comment=$1, updated_at=$2 WHERE id=$3")
-                    .bind(comment)
-                    .bind(now)
-                    .bind(row.id)
-                    .execute(state.pool.as_ref())
-                    .await
-                    .map_err(crate::db_err)?;
+                uc_db::repos::table::patch(&state.pool, row.id, None, Some(comment), None, None, now).await?;
             }
             DeltaTableUpdate::SetPartitionColumns { partition_columns } => {
                 let json = serde_json::to_string(partition_columns).unwrap_or_default();
-                sqlx::query(
-                    "INSERT OR REPLACE INTO uc_properties (id, entity_id, entity_type, property_key, property_value) VALUES ($1,$2,'table','__delta_partition_cols__',$3)"
+                uc_db::repos::property::set(
+                    &state.pool,
+                    row.id,
+                    "table",
+                    "__delta_partition_cols__",
+                    &json,
                 )
-                .bind(Uuid::now_v7()).bind(row.id).bind(&json)
-                .execute(state.pool.as_ref()).await.map_err(crate::db_err)?;
+                .await?;
             }
             DeltaTableUpdate::SetProtocol { protocol } => {
                 // Store protocol as properties
-                sqlx::query(
-                    "INSERT OR REPLACE INTO uc_properties (id, entity_id, entity_type, property_key, property_value) VALUES ($1,$2,'table','delta.minReaderVersion',$3)"
+                uc_db::repos::property::set(
+                    &state.pool,
+                    row.id,
+                    "table",
+                    "delta.minReaderVersion",
+                    &protocol.min_reader_version.to_string(),
                 )
-                .bind(Uuid::now_v7()).bind(row.id).bind(protocol.min_reader_version.to_string())
-                .execute(state.pool.as_ref()).await.map_err(crate::db_err)?;
-                sqlx::query(
-                    "INSERT OR REPLACE INTO uc_properties (id, entity_id, entity_type, property_key, property_value) VALUES ($1,$2,'table','delta.minWriterVersion',$3)"
+                .await?;
+                uc_db::repos::property::set(
+                    &state.pool,
+                    row.id,
+                    "table",
+                    "delta.minWriterVersion",
+                    &protocol.min_writer_version.to_string(),
                 )
-                .bind(Uuid::now_v7()).bind(row.id).bind(protocol.min_writer_version.to_string())
-                .execute(state.pool.as_ref()).await.map_err(crate::db_err)?;
+                .await?;
             }
             DeltaTableUpdate::SetDomainMetadata { updates } => {
                 let json = serde_json::to_string(updates).unwrap_or_default();
-                sqlx::query(
-                    "INSERT OR REPLACE INTO uc_properties (id, entity_id, entity_type, property_key, property_value) VALUES ($1,$2,'table','__delta_domain_metadata__',$3)"
+                uc_db::repos::property::set(
+                    &state.pool,
+                    row.id,
+                    "table",
+                    "__delta_domain_metadata__",
+                    &json,
                 )
-                .bind(Uuid::now_v7()).bind(row.id).bind(&json)
-                .execute(state.pool.as_ref()).await.map_err(crate::db_err)?;
+                .await?;
             }
             DeltaTableUpdate::RemoveDomainMetadata { domains } => {
                 for domain in domains {
-                    sqlx::query(
-                        "DELETE FROM uc_properties WHERE entity_id=$1 AND entity_type='table' AND property_key=$2"
+                    uc_db::repos::property::delete_key(
+                        &state.pool,
+                        row.id,
+                        "table",
+                        &format!("__delta_domain__{}", domain),
                     )
-                    .bind(row.id).bind(format!("__delta_domain__{}", domain))
-                    .execute(state.pool.as_ref()).await.map_err(crate::db_err)?;
+                    .await?;
                 }
             }
             DeltaTableUpdate::SetLatestBackfilledVersion {
                 latest_published_version,
             } => {
                 // Mark the commit at this version as the backfilled latest
-                sqlx::query(
-                    "UPDATE uc_delta_commits SET is_backfilled_latest_commit=1 WHERE table_id=$1 AND commit_version=$2"
-                )
-                .bind(row.id).bind(latest_published_version)
-                .execute(state.pool.as_ref()).await.map_err(crate::db_err)?;
+                uc_db::repos::delta::mark_backfilled(&state.pool, row.id, *latest_published_version)
+                    .await?;
             }
             DeltaTableUpdate::UpdateMetadataSnapshotVersion {
                 last_commit_version,
                 last_commit_timestamp_ms,
             } => {
                 // Update the table's metadata snapshot version tracking
-                sqlx::query(
-                    "UPDATE uc_tables SET uniform_iceberg_converted_delta_version=$1, uniform_iceberg_converted_delta_timestamp=$2, updated_at=$3 WHERE id=$4"
+                uc_db::repos::table::patch(
+                    &state.pool,
+                    row.id,
+                    None,
+                    None,
+                    Some(*last_commit_version),
+                    Some(*last_commit_timestamp_ms),
+                    now,
                 )
-                .bind(last_commit_version).bind(last_commit_timestamp_ms).bind(now).bind(row.id)
-                .execute(state.pool.as_ref()).await.map_err(crate::db_err)?;
+                .await?;
             }
         }
     }
@@ -344,13 +356,7 @@ pub async fn rename_table(
     let schema_row = schema::get_by_full_name(&state.pool, &catalog, &schema).await?;
     let row = table::get_by_schema_and_name(&state.pool, schema_row.id, &table).await?;
     let now = chrono::Utc::now().timestamp_millis();
-    sqlx::query("UPDATE uc_tables SET name=$1, updated_at=$2 WHERE id=$3")
-        .bind(&req.new_name)
-        .bind(now)
-        .bind(row.id)
-        .execute(state.pool.as_ref())
-        .await
-        .map_err(crate::db_err)?;
+    table::rename(&state.pool, row.id, &req.new_name, now).await?;
     let updated = table::get_by_id(&state.pool, row.id).await?;
     let metadata = DeltaTableMetadata {
         etag: Some(updated.id.to_string()),

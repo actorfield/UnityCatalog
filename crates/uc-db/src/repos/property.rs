@@ -71,3 +71,46 @@ pub async fn delete_for_entity(
         .uc_err()?;
     Ok(())
 }
+
+/// Upsert a single property, replacing any existing value for that key.
+/// Mirrors the `INSERT OR REPLACE` the delta commit handler issued inline.
+pub async fn set(
+    pool: &AnyPool,
+    entity_id: Uuid,
+    entity_type: &str,
+    key: &str,
+    value: &str,
+) -> Result<(), UcError> {
+    sqlx::query(
+        "INSERT OR REPLACE INTO uc_properties \
+         (id, entity_id, entity_type, property_key, property_value) VALUES ($1,$2,$3,$4,$5)",
+    )
+    .bind(Uuid::now_v7())
+    .bind(entity_id)
+    .bind(entity_type)
+    .bind(key)
+    .bind(value)
+    .execute(pool)
+    .await
+    .uc_err()?;
+    Ok(())
+}
+
+/// Delete one property by key. Deleting an absent key is not an error.
+pub async fn delete_key(
+    pool: &AnyPool,
+    entity_id: Uuid,
+    entity_type: &str,
+    key: &str,
+) -> Result<(), UcError> {
+    sqlx::query(
+        "DELETE FROM uc_properties WHERE entity_id=$1 AND entity_type=$2 AND property_key=$3",
+    )
+    .bind(entity_id)
+    .bind(entity_type)
+    .bind(key)
+    .execute(pool)
+    .await
+    .uc_err()?;
+    Ok(())
+}
