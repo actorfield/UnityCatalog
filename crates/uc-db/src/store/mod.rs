@@ -91,6 +91,26 @@ impl Snapshot {
             .collect()
     }
 
+    /// Every row of one kind, in unspecified order.
+    ///
+    /// For the handful of lookups that hit a non-UNIQUE column and so have no
+    /// natural-key index to ride on. Linear, deliberately: adding a secondary
+    /// index for each would cost more than it saves at these row counts.
+    pub fn iter(&self, kind: EntityKind) -> impl Iterator<Item = &serde_json::Value> {
+        self.entities.get(&kind).into_iter().flat_map(|m| m.values())
+    }
+
+    /// Every natural key under a prefix, with its id. Unlike `scan_prefix` this
+    /// is unbounded — for callers that must act on the whole group, such as
+    /// replacing an entity's property set.
+    pub fn ids_under_prefix(&self, kind: EntityKind, prefix: &str) -> Vec<Uuid> {
+        self.by_natural_key
+            .range((kind, prefix.to_string())..)
+            .take_while(|((k, nk), _)| *k == kind && nk.starts_with(prefix))
+            .map(|(_, id)| *id)
+            .collect()
+    }
+
     /// Apply one action. Must be deterministic and total — replay correctness
     /// depends on identical input producing identical state.
     fn apply(&mut self, act: &Action) {
@@ -254,6 +274,14 @@ impl Store {
                 let (actions, out) = build(&state)?;
                 (actions, out, state.version + 1)
             };
+
+            // A build that produced no actions has nothing to record. Writing
+            // an empty commit would still burn a version and an object, so a
+            // no-op path called once per startup -- get_or_init is exactly
+            // that -- would grow the log forever without changing any state.
+            if actions.is_empty() {
+                return Ok(out);
+            }
 
             let info = CommitInfo {
                 format: action::FORMAT_VERSION,

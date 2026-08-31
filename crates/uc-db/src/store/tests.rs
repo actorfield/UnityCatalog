@@ -675,3 +675,121 @@ async fn a_bounded_range_does_not_page_the_whole_partition() {
         "reading 6 of 200 commits took {pages} listings; the range bound is not applied"
     );
 }
+
+// ── ported repos that tighten SQL behaviour ─────────────────────────────────
+//
+// These reach through `repos::*`, which resolves to the SQL bodies unless the
+// `logstore` feature selects the ported ones — so they only compile there.
+#[cfg(feature = "logstore")]
+mod ported {
+    use super::*;
+
+
+    /// The SQL get_or_init is a read-then-insert with nothing between, and
+    /// uc_metastore has no UNIQUE, so two replicas starting together could both
+    /// insert. Here the check is inside the commit closure, so the loser re-runs
+    /// it and adopts the winner's row.
+    #[tokio::test]
+    async fn concurrent_metastore_init_yields_one_row() {
+        use crate::repos::metastore;
+
+        let log = Arc::new(MemLog::default());
+        let a = Store::open(log.clone()).await.unwrap();
+        let b = Store::open(log.clone()).await.unwrap();
+
+        // Both replicas observe an empty metastore before either writes.
+        assert!(a.snapshot().await.iter(EntityKind::Metastore).next().is_none());
+        assert!(b.snapshot().await.iter(EntityKind::Metastore).next().is_none());
+
+        let first = metastore::get_or_init(&a, "unity-catalog").await.unwrap();
+        let second = metastore::get_or_init(&b, "unity-catalog").await.unwrap();
+
+        assert_eq!(first.id, second.id, "the loser must adopt the winner's row");
+
+        let cold = Store::open(log).await.unwrap();
+        assert_eq!(cold.snapshot().await.iter(EntityKind::Metastore).count(), 1);
+    }
+
+    #[tokio::test]
+    async fn get_or_init_is_idempotent_and_commits_nothing_when_present() {
+        use crate::repos::metastore;
+
+        let log = Arc::new(MemLog::default());
+        let store = Store::open(log).await.unwrap();
+
+        let first = metastore::get_or_init(&store, "unity-catalog").await.unwrap();
+        let v = store.snapshot().await.version;
+        let again = metastore::get_or_init(&store, "unity-catalog").await.unwrap();
+
+        assert_eq!(first.id, again.id);
+        assert_eq!(store.snapshot().await.version, v, "a no-op must not append");
+    }
+
+    /// The SQL replace is DELETE + N INSERTs and documents itself as requiring an
+    /// enclosing transaction. As one commit, a reader can never observe the
+    /// entity mid-replace with its properties missing.
+    #[tokio::test]
+    async fn property_replace_is_one_atomic_commit() {
+        use crate::repos::property;
+
+        let log = Arc::new(MemLog::default());
+        let store = Store::open(log.clone()).await.unwrap();
+        let e = Uuid::now_v7();
+
+        let props = |pairs: &[(&str, &str)]| -> std::collections::HashMap<String, String> {
+            pairs.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect()
+        };
+
+        property::replace(&store, e, "table", &props(&[("a", "1"), ("b", "2")]))
+            .await
+            .unwrap();
+        let v1 = store.snapshot().await.version;
+
+        property::replace(&store, e, "table", &props(&[("b", "22"), ("c", "3")]))
+            .await
+            .unwrap();
+
+        assert_eq!(
+            store.snapshot().await.version,
+            v1 + 1,
+            "delete-then-insert must be a single commit, not one per property"
+        );
+
+        let got = property::get_for_entity(&store, e, "table").await.unwrap();
+        assert_eq!(got, props(&[("b", "22"), ("c", "3")]));
+
+        // Replay agrees: no intermediate state was ever durable.
+        let cold = Store::open(log).await.unwrap();
+        assert_eq!(
+            property::get_for_entity(&cold, e, "table").await.unwrap(),
+            props(&[("b", "22"), ("c", "3")])
+        );
+    }
+
+    #[tokio::test]
+    async fn properties_are_scoped_by_entity_and_type() {
+        use crate::repos::property;
+
+        let log = Arc::new(MemLog::default());
+        let store = Store::open(log).await.unwrap();
+        let (e1, e2) = (Uuid::now_v7(), Uuid::now_v7());
+        let one = |k: &str, v: &str| -> std::collections::HashMap<String, String> {
+            std::iter::once((k.to_string(), v.to_string())).collect()
+        };
+
+        property::replace(&store, e1, "table", &one("k", "table-val")).await.unwrap();
+        property::replace(&store, e1, "schema", &one("k", "schema-val")).await.unwrap();
+        property::replace(&store, e2, "table", &one("k", "other-entity")).await.unwrap();
+
+        assert_eq!(property::get_for_entity(&store, e1, "table").await.unwrap(), one("k", "table-val"));
+        assert_eq!(property::get_for_entity(&store, e1, "schema").await.unwrap(), one("k", "schema-val"));
+        assert_eq!(property::get_for_entity(&store, e2, "table").await.unwrap(), one("k", "other-entity"));
+
+        // Deleting one group must not touch the others.
+        property::delete_for_entity(&store, e1, "table").await.unwrap();
+        assert!(property::get_for_entity(&store, e1, "table").await.unwrap().is_empty());
+        assert_eq!(property::get_for_entity(&store, e1, "schema").await.unwrap(), one("k", "schema-val"));
+        assert_eq!(property::get_for_entity(&store, e2, "table").await.unwrap(), one("k", "other-entity"));
+    }
+
+}

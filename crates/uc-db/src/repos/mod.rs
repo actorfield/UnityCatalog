@@ -16,6 +16,8 @@ macro_rules! repo {
 repo!(catalog, "catalog_store.rs");
 repo!(schema, "schema_store.rs");
 repo!(delta, "delta_store.rs");
+repo!(metastore, "metastore_store.rs");
+repo!(property, "property_store.rs");
 
 // Not yet ported — SQL only, so the logstore build does not yet link them.
 #[cfg(not(feature = "logstore"))]
@@ -25,11 +27,7 @@ pub mod external_location;
 #[cfg(not(feature = "logstore"))]
 pub mod function;
 #[cfg(not(feature = "logstore"))]
-pub mod metastore;
-#[cfg(not(feature = "logstore"))]
 pub mod model;
-#[cfg(not(feature = "logstore"))]
-pub mod property;
 #[cfg(not(feature = "logstore"))]
 pub mod staging;
 #[cfg(not(feature = "logstore"))]

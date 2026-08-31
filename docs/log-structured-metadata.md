@@ -289,6 +289,30 @@ variable-length user-supplied field ever moves out of last position, this needs
 escaping or length prefixes. Pinned by
 `nul_separation_is_ambiguous_if_a_non_final_component_contains_nul`.
 
+## Two SQL behaviours the port tightens
+
+Both are cases where the log store is stricter than SQLite, not merely
+equivalent. Called out because they are behaviour changes, even if they are
+changes toward correctness.
+
+**`metastore::get_or_init`** is a read-then-insert with nothing between the two
+statements, and `uc_metastore` carries no UNIQUE constraint, so two uc-servers
+starting together can both observe no row and both insert. Neither notices,
+because `get` uses `LIMIT 1`. On the log store the check runs inside the commit
+closure, so a replica that loses the race re-runs it, finds the winner's row,
+and returns that.
+
+**`property::replace`** is a DELETE followed by one INSERT per property, and its
+own doc comment says it "must be called inside a transaction" — leaving
+atomicity as a precondition on every caller. As a single commit the deletes and
+inserts land together, so no reader can observe the entity mid-replace with its
+properties missing. The warning no longer applies.
+
+A no-op commit is skipped rather than written. `get_or_init` returns no actions
+once the metastore exists, and it runs on every startup; writing an empty commit
+would burn a log version and an object each time, growing the log forever
+without changing state.
+
 ## Open question: read freshness
 
 Once there is more than one replica, replica B serves stale reads until it
@@ -304,7 +328,7 @@ worth choosing now — but worth not pretending multi-replica arrives for free.
 
   1. `store/` module: actions, log, replay, checkpoint, in-memory indices  <- sketched
   2. port repos/catalog.rs as the worked example                           <- sketched
-  3. port remaining 10 repo modules
+  3. port remaining 8 repo modules
   4. port the 19 direct sqlx sites in uc-api
   5. casbin policy off the pool
   6. keys to _keys.json
