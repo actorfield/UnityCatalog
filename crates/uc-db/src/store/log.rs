@@ -72,6 +72,20 @@ pub async fn list_all_after(
     prefix: &str,
     start_after: &str,
 ) -> Result<Vec<String>, UcError> {
+    list_all_in_range(log, prefix, start_after, None).await
+}
+
+/// As `list_all_after`, but stops paging once keys pass `stop_at` (inclusive).
+///
+/// Without a bound, reading commits 5..10 of a table with 100k of them would
+/// page the entire partition before filtering. That is the hot Delta read path
+/// -- clients ask for recent ranges -- so the bound is not a micro-optimisation.
+pub async fn list_all_in_range(
+    log: &dyn ObjectLog,
+    prefix: &str,
+    start_after: &str,
+    stop_at: Option<&str>,
+) -> Result<Vec<String>, UcError> {
     let mut all: Vec<String> = Vec::new();
     let mut cursor = start_after.to_string();
     loop {
@@ -79,6 +93,12 @@ pub async fn list_all_after(
         let Some(last) = page.last().cloned() else {
             return Ok(all);
         };
+        if let Some(stop) = stop_at {
+            if last.as_str() > stop {
+                all.extend(page.into_iter().take_while(|k| k.as_str() <= stop));
+                return Ok(all);
+            }
+        }
         // A backend that ignores start_after would loop forever; refuse rather
         // than spin.
         if last <= cursor {

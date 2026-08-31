@@ -253,6 +253,42 @@ and no caller may treat one call as the complete set. Stating it was not enough
 on its own — the safeguard has to be in the shared helper, because a doc comment
 does not survive the next implementor.
 
+## Natural keys must be verified against the schema, not recalled
+
+Three of the natural keys in the first sketch were wrong, and all three would
+have failed silently — the store would simply enforce a different constraint
+than SQLite did, or none:
+
+  - `User` was keyed on `email`. `uc_users` declares `name TEXT NOT NULL
+    UNIQUE`; `email` is nullable with no constraint. So the real uniqueness
+    check was lost, and every user with a null email would have dropped out of
+    the index entirely.
+  - `Column` had no key at all, despite UNIQUE(table_id, ordinal_position).
+  - `Property` had no key, despite UNIQUE(entity_id, entity_type, property_key).
+
+Correctly absent: uc_metastore, uc_function_parameters, uc_model_versions (its
+(registered_model_id, version) index is *not* UNIQUE), uc_staging_tables,
+uc_dependencies. Inventing keys for those would reject writes SQLite accepts.
+
+Integer components are rendered with `pad_i64` so lexicographic order matches
+numeric order across zero — ordinal_position feeds ordered reads.
+
+Tests now pin each key to its constraint, because this is exactly the class of
+error that passes every functional test.
+
+### The NUL separator has a precondition
+
+Composite keys join components with NUL. That is unambiguous only while every
+component *except the last* is NUL-free — a precondition on the inputs, not a
+property of the encoding.
+
+It holds today because user-supplied text is always the final component: names
+sit last in every two-part key, and Property's middle component `entity_type`
+is an internal literal ('table', 'schema', 'catalog'), never client input. If a
+variable-length user-supplied field ever moves out of last position, this needs
+escaping or length prefixes. Pinned by
+`nul_separation_is_ambiguous_if_a_non_final_component_contains_nul`.
+
 ## Open question: read freshness
 
 Once there is more than one replica, replica B serves stale reads until it

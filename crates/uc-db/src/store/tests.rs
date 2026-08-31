@@ -6,6 +6,7 @@
 
 use super::action::{Action, EntityKind};
 use super::log::{ObjectLog, PutResult};
+use super::{natural_key_for, pad_i64};
 use super::*;
 use std::collections::BTreeMap;
 use std::sync::Mutex;
@@ -513,4 +514,164 @@ async fn a_backend_that_ignores_start_after_is_refused_not_looped_forever() {
         ),
         Ok(_) => panic!("a backend that ignores start_after must be refused"),
     }
+}
+
+// ── natural keys vs the real schema ─────────────────────────────────────────
+//
+// These pin `natural_key_for` to the UNIQUE constraints actually declared in
+// migrations/sqlite/20240001_initial_schema.sql. Getting one wrong is silent:
+// the store simply enforces a different constraint than SQLite did, or none.
+
+#[test]
+fn user_is_keyed_on_name_not_email() {
+    // uc_users: `name TEXT NOT NULL UNIQUE`, `email TEXT` (nullable, no
+    // constraint). Keying on email would lose the real uniqueness check and
+    // drop every user with a null email out of the index entirely.
+    let with_email = serde_json::json!({"name": "ada", "email": "ada@example.com"});
+    let without = serde_json::json!({"name": "ada"});
+    assert_eq!(natural_key_for(EntityKind::User, &with_email).as_deref(), Some("ada"));
+    assert_eq!(
+        natural_key_for(EntityKind::User, &without).as_deref(),
+        Some("ada"),
+        "a user with no email must still be indexed"
+    );
+}
+
+#[test]
+fn columns_are_keyed_by_table_and_ordinal() {
+    // UNIQUE(table_id, ordinal_position)
+    let t = Uuid::new_v4();
+    let col = |n: i64| serde_json::json!({"table_id": t, "ordinal_position": n});
+    let k = |n: i64| natural_key_for(EntityKind::Column, &col(n)).unwrap();
+
+    assert_ne!(k(0), k(1));
+    assert!(k(2) < k(10), "ordinals must sort numerically, not as text");
+    assert!(k(9) < k(10));
+}
+
+#[test]
+fn properties_are_keyed_by_entity_and_key() {
+    // UNIQUE(entity_id, entity_type, property_key)
+    let e = Uuid::new_v4();
+    let p = |ty: &str, key: &str| {
+        serde_json::json!({"entity_id": e, "entity_type": ty, "property_key": key})
+    };
+    let k = |ty: &str, key: &str| natural_key_for(EntityKind::Property, &p(ty, key)).unwrap();
+
+    assert_ne!(k("TABLE", "a"), k("TABLE", "b"));
+    assert_ne!(
+        k("TABLE", "a"),
+        k("SCHEMA", "a"),
+        "the same key on different entity types must not collide"
+    );
+}
+
+#[test]
+fn entities_without_a_unique_constraint_are_id_addressed_only() {
+    // Nothing in the schema constrains these, so inventing a key here would
+    // reject writes SQLite accepts today.
+    for kind in [
+        EntityKind::Metastore,
+        EntityKind::FunctionParameter,
+        EntityKind::ModelVersion, // its (registered_model_id, version) index is not UNIQUE
+        EntityKind::StagingTable,
+        EntityKind::Dependency,
+        EntityKind::CasbinRule,
+    ] {
+        let body = serde_json::json!({"name": "x", "version": 1, "schema_id": Uuid::nil()});
+        assert_eq!(natural_key_for(kind, &body), None, "{kind:?} has no UNIQUE");
+    }
+}
+
+#[test]
+fn delta_commits_are_not_snapshot_entities() {
+    // They live in per-table partitions where the version is the object key.
+    let body = serde_json::json!({"table_id": Uuid::nil(), "commit_version": 3});
+    assert_eq!(natural_key_for(EntityKind::DeltaCommit, &body), None);
+}
+
+/// NUL separation is unambiguous only while every component *except the last*
+/// is NUL-free. That is not a property of the encoding, it is a precondition
+/// on the inputs, so it is worth stating exactly rather than assuming.
+///
+/// It holds because user-supplied text is always the final component: names sit
+/// last in every two-part key, and Property's middle component (`entity_type`)
+/// is an internal literal -- 'table', 'schema', 'catalog' -- never client input.
+/// Should a variable-length user-supplied field ever move out of last position,
+/// this encoding needs escaping or length prefixes.
+#[test]
+fn nul_separation_is_ambiguous_if_a_non_final_component_contains_nul() {
+    let key = |ty: &str, k: &str| {
+        natural_key_for(
+            EntityKind::Property,
+            &serde_json::json!({"entity_id": "e", "entity_type": ty, "property_key": k}),
+        )
+    };
+    // A NUL in the middle component collides. Unreachable today, but real.
+    assert_eq!(key("A\u{0}B", "c"), key("A", "B\u{0}c"));
+
+    // A NUL in the *final* component is harmless: nothing follows it to absorb.
+    assert_ne!(key("A", "b\u{0}c"), key("A", "b"));
+}
+
+#[test]
+fn padded_ints_order_numerically_across_zero() {
+    let mut v = [5i64, -1, 0, 10, -10, i64::MAX, i64::MIN, 1];
+    let mut by_pad = v;
+    by_pad.sort_by_key(|n| pad_i64(*n));
+    v.sort();
+    assert_eq!(by_pad, v, "lexicographic order of pad_i64 must match numeric order");
+}
+
+// ── bounded range listings ──────────────────────────────────────────────────
+
+/// Counts listing calls so a bounded read cannot quietly page the whole
+/// partition.
+struct CountingLog {
+    inner: MemLog,
+    page: usize,
+    lists: std::sync::atomic::AtomicUsize,
+}
+
+#[async_trait::async_trait]
+impl ObjectLog for CountingLog {
+    async fn put_if_absent(&self, k: &str, b: Vec<u8>) -> Result<PutResult, UcError> {
+        self.inner.put_if_absent(k, b).await
+    }
+    async fn get(&self, k: &str) -> Result<Option<Vec<u8>>, UcError> {
+        self.inner.get(k).await
+    }
+    async fn list_after(&self, prefix: &str, after: &str) -> Result<Vec<String>, UcError> {
+        self.lists.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        let mut keys = self.inner.list_after(prefix, after).await?;
+        keys.truncate(self.page);
+        Ok(keys)
+    }
+    async fn put(&self, k: &str, b: Vec<u8>) -> Result<(), UcError> {
+        self.inner.put(k, b).await
+    }
+}
+
+#[tokio::test]
+async fn a_bounded_range_does_not_page_the_whole_partition() {
+    let log = Arc::new(CountingLog {
+        inner: MemLog::default(),
+        page: 10,
+        lists: std::sync::atomic::AtomicUsize::new(0),
+    });
+    let store = Store::open(log.clone()).await.unwrap();
+    let t = Uuid::new_v4();
+    for v in 0..200 {
+        store.delta.append(t, v, delta_row(t, v)).await.unwrap();
+    }
+
+    log.lists.store(0, std::sync::atomic::Ordering::SeqCst);
+    let got = store.delta.versions(t, Some(5), Some(10)).await.unwrap();
+    let pages = log.lists.load(std::sync::atomic::Ordering::SeqCst);
+
+    assert_eq!(got, vec![5, 6, 7, 8, 9, 10]);
+    assert!(
+        pages <= 2,
+        "reading 6 of 200 commits took {pages} listings; the range bound is not applied"
+    );
 }

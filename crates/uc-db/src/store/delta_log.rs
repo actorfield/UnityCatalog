@@ -29,7 +29,7 @@
 //! than something that has to be detected. Nothing about a table's commit
 //! history needs to be in memory.
 
-use super::log::{list_all_after, ObjectLog, PutResult};
+use super::log::{list_all_after, list_all_in_range, ObjectLog, PutResult};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
@@ -112,12 +112,17 @@ impl DeltaLog {
             Some(v) => commit_key(table_id, v - 1),
             None => prefix.clone(),
         };
-        let mut versions: Vec<i64> = list_all_after(&*self.log, &prefix, &after)
-            .await?
-            .iter()
-            .filter_map(|k| version_from_key(k))
-            .filter(|v| ending.is_none_or(|e| *v <= e))
-            .collect();
+        // Bound the listing rather than draining the partition and filtering:
+        // a client asking for versions 5..10 of a long-lived table must not
+        // page its entire history first.
+        let stop = ending.map(|e| commit_key(table_id, e));
+        let mut versions: Vec<i64> =
+            list_all_in_range(&*self.log, &prefix, &after, stop.as_deref())
+                .await?
+                .iter()
+                .filter_map(|k| version_from_key(k))
+                .filter(|v| ending.is_none_or(|e| *v <= e))
+                .collect();
         versions.sort_unstable();
         Ok(versions)
     }

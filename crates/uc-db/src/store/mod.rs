@@ -347,24 +347,64 @@ impl Store {
 /// ("a\u{0}b", "c") cannot collide with ("a", "b\u{0}c").
 fn natural_key_for(kind: EntityKind, body: &serde_json::Value) -> Option<String> {
     let s = |f: &str| body.get(f).and_then(|v| v.as_str()).map(str::to_owned);
-    let u = |f: &str| body.get(f).and_then(|v| v.as_u64());
+    let i = |f: &str| body.get(f).and_then(|v| v.as_i64());
     match kind {
+        // uc_catalogs.name UNIQUE
         EntityKind::Catalog => s("name"),
+        // UNIQUE(catalog_id, name)
         EntityKind::Schema => Some(format!("{}\u{0}{}", s("catalog_id")?, s("name")?)),
+        // UNIQUE(schema_id, name)
         EntityKind::Table => Some(format!("{}\u{0}{}", s("schema_id")?, s("name")?)),
         EntityKind::Volume => Some(format!("{}\u{0}{}", s("schema_id")?, s("name")?)),
         EntityKind::Function => Some(format!("{}\u{0}{}", s("schema_id")?, s("name")?)),
         EntityKind::RegisteredModel => Some(format!("{}\u{0}{}", s("schema_id")?, s("name")?)),
-        // UNIQUE(table_id, commit_version) — the Delta OCC constraint, and the
-        // reason this design needs conditional PUT at all. Zero-padded so range
-        // scans over versions stay ordered.
-        EntityKind::DeltaCommit => {
-            Some(format!("{}\u{0}{:020}", s("table_id")?, u("commit_version")?))
-        }
-        EntityKind::ExternalLocation => s("name"),
+        // UNIQUE(table_id, ordinal_position). Zero-padded and sign-prefixed so
+        // the index also serves "columns of this table, in ordinal order",
+        // which is how every caller reads them.
+        EntityKind::Column => Some(format!(
+            "{}\u{0}{}",
+            s("table_id")?,
+            pad_i64(i("ordinal_position")?)
+        )),
+        // UNIQUE(entity_id, entity_type, property_key)
+        EntityKind::Property => Some(format!(
+            "{}\u{0}{}\u{0}{}",
+            s("entity_id")?,
+            s("entity_type")?,
+            s("property_key")?
+        )),
+        // uc_users.name UNIQUE. NOT email: that column is nullable and carries
+        // no constraint, so keying on it would both lose the real uniqueness
+        // check and drop every user with a null email out of the index.
+        EntityKind::User => s("name"),
+        // uc_credentials.name UNIQUE
         EntityKind::Credential => s("name"),
-        EntityKind::User => s("email"),
-        // No UNIQUE constraint in the schema — id-addressed only.
-        _ => None,
+        // uc_external_locations.name UNIQUE
+        EntityKind::ExternalLocation => s("name"),
+        // Delta commits are not held in the snapshot at all -- they live in
+        // per-table partitions where the version is the object key. See
+        // store::delta_log.
+        EntityKind::DeltaCommit => None,
+        // No UNIQUE constraint in the schema, so id-addressed only:
+        // uc_metastore, uc_function_parameters, uc_model_versions (its
+        // (registered_model_id, version) index is not unique),
+        // uc_staging_tables, uc_dependencies, casbin_rule.
+        EntityKind::Metastore
+        | EntityKind::FunctionParameter
+        | EntityKind::ModelVersion
+        | EntityKind::StagingTable
+        | EntityKind::Dependency
+        | EntityKind::CasbinRule => None,
+    }
+}
+
+/// Render an integer so lexicographic order matches numeric order. The sign
+/// character is chosen so negatives sort below non-negatives, and negative
+/// magnitudes are complemented so -1 sorts above -2.
+fn pad_i64(v: i64) -> String {
+    if v < 0 {
+        format!("-{:019}", i64::MAX + v + 1)
+    } else {
+        format!("0{v:019}")
     }
 }
