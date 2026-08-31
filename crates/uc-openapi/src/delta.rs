@@ -416,7 +416,7 @@ mod tests {
 
     #[test]
     fn delta_requirement_assert_uuid_round_trip() {
-        let uuid = Uuid::new_v4();
+        let uuid = Uuid::now_v7();
         let req = DeltaTableRequirement::AssertTableUuid { uuid };
         let json = serde_json::to_string(&req).unwrap();
         assert!(json.contains(r#""type":"assert-table-uuid""#));

@@ -108,7 +108,7 @@ mod tests {
 
     fn fake_catalog(storage_root: Option<&str>) -> CatalogRow {
         CatalogRow {
-            id: Uuid::new_v4(),
+            id: Uuid::now_v7(),
             name: "cat".into(),
             comment: None,
             owner: None,
@@ -123,8 +123,8 @@ mod tests {
 
     fn fake_schema(storage_root: Option<&str>) -> SchemaRow {
         SchemaRow {
-            id: Uuid::new_v4(),
-            catalog_id: Uuid::new_v4(),
+            id: Uuid::now_v7(),
+            catalog_id: Uuid::now_v7(),
             name: "sch".into(),
             comment: None,
             owner: None,

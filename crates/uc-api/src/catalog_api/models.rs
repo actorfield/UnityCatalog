@@ -39,7 +39,7 @@ pub async fn create_model(
         require(&state, user.id, schema.id, Privilege::CreateModel).await?;
     }
     validate_sql_name(&req.name)?;
-    let id = Uuid::new_v4();
+    let id = Uuid::now_v7();
     let now = now_ms();
     // #1143: auto-derive model storage location from storage_root if not provided
     let model_storage = match req.storage_location {
@@ -215,7 +215,7 @@ pub async fn create_version(
     let model =
         model::get_model_by_schema_and_name(&state.pool, schema.id, &req.model_name).await?;
     let next_ver = model.max_version_number.unwrap_or(0) + 1;
-    let id = Uuid::new_v4();
+    let id = Uuid::now_v7();
     let now = now_ms();
     // #1143: derive version storage location from model storage location
     let version_url = model

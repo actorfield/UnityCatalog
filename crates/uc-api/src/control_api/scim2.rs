@@ -22,7 +22,7 @@ pub async fn create_user(
     State(state): State<AppState>,
     Json(req): Json<UserResource>,
 ) -> Result<Json<UserResource>, UcError> {
-    let id = Uuid::new_v4();
+    let id = Uuid::now_v7();
     let now = chrono::Utc::now().timestamp_millis();
     let email_from_list = req
         .emails

@@ -139,7 +139,7 @@ async fn delta_assert_table_uuid_mismatch_returns_409() {
     )
     .await;
 
-    let wrong_uuid = uuid::Uuid::new_v4().to_string();
+    let wrong_uuid = uuid::Uuid::now_v7().to_string();
     let (s, _) = post(
         &app,
         &delta_tables("req_t"),

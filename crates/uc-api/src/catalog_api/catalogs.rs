@@ -42,7 +42,7 @@ pub async fn create(
     }
 
     validate_sql_name(&req.name)?;
-    let id = Uuid::new_v4();
+    let id = Uuid::now_v7();
     let now = chrono::Utc::now().timestamp_millis();
     let creator = if state.auth_enabled {
         Some(claims.sub.as_str())

@@ -1,3 +1,9 @@
+// Exercises the SQL repo layer directly against sqlite::memory:. Nine of the
+// modules it imports are not ported to the log store yet, so under `logstore`
+// they do not exist -- skip the file wholesale rather than half-gate it. Delete
+// this attribute once the port is complete and these tests run on both paths.
+#![cfg(not(feature = "logstore"))]
+
 /// Integration tests for uc-db repositories using in-memory SQLite.
 /// These test every repo method directly — no HTTP layer.
 use uc_db::{
@@ -47,7 +53,7 @@ async fn metastore_get_or_init() {
 #[tokio::test]
 async fn catalog_crud() {
     let pool = setup_pool().await;
-    let id = Uuid::new_v4();
+    let id = Uuid::now_v7();
     let created = catalog::create(&pool, id, "cat1", Some("comment"), None, None, None, now())
         .await
         .unwrap();
@@ -75,7 +81,7 @@ async fn catalog_list_pagination() {
     for i in 0..5 {
         catalog::create(
             &pool,
-            Uuid::new_v4(),
+            Uuid::now_v7(),
             &format!("cat_{:02}", i),
             None,
             None,
@@ -98,13 +104,13 @@ async fn catalog_list_pagination() {
 async fn catalog_not_found_returns_error() {
     let pool = setup_pool().await;
     assert!(catalog::get_by_name(&pool, "missing").await.is_err());
-    assert!(catalog::get_by_id(&pool, Uuid::new_v4()).await.is_err());
+    assert!(catalog::get_by_id(&pool, Uuid::now_v7()).await.is_err());
 }
 
 // ── schema ────────────────────────────────────────────────────────────────
 
 async fn make_catalog(pool: &AnyPool, name: &str) -> Uuid {
-    let id = Uuid::new_v4();
+    let id = Uuid::now_v7();
     catalog::create(pool, id, name, None, None, None, None, now())
         .await
         .unwrap();
@@ -115,7 +121,7 @@ async fn make_catalog(pool: &AnyPool, name: &str) -> Uuid {
 async fn schema_crud() {
     let pool = setup_pool().await;
     let cat_id = make_catalog(&pool, "schema_cat").await;
-    let id = Uuid::new_v4();
+    let id = Uuid::now_v7();
     let s = schema::create(&pool, id, cat_id, "sch1", None, None, None, None, now())
         .await
         .unwrap();
@@ -144,7 +150,7 @@ async fn schema_list() {
     let cat_id = make_catalog(&pool, "schema_list_cat").await;
     schema::create(
         &pool,
-        Uuid::new_v4(),
+        Uuid::now_v7(),
         cat_id,
         "a",
         None,
@@ -157,7 +163,7 @@ async fn schema_list() {
     .unwrap();
     schema::create(
         &pool,
-        Uuid::new_v4(),
+        Uuid::now_v7(),
         cat_id,
         "b",
         None,
@@ -178,7 +184,7 @@ async fn schema_list() {
 
 async fn make_schema(pool: &AnyPool, cat: &str, sch: &str) -> (Uuid, Uuid) {
     let cat_id = make_catalog(pool, cat).await;
-    let sch_id = Uuid::new_v4();
+    let sch_id = Uuid::now_v7();
     schema::create(pool, sch_id, cat_id, sch, None, None, None, None, now())
         .await
         .unwrap();
@@ -190,7 +196,7 @@ async fn table_crud_with_columns() {
     let pool = setup_pool().await;
     let (_, sch_id) = make_schema(&pool, "tbl_cat", "tbl_sch").await;
 
-    let id = Uuid::new_v4();
+    let id = Uuid::now_v7();
     let row = TableRow {
         id,
         schema_id: sch_id,
@@ -214,7 +220,7 @@ async fn table_crud_with_columns() {
     assert_eq!(created.name, "t1");
 
     let col = ColumnRow {
-        id: Uuid::new_v4(),
+        id: Uuid::now_v7(),
         table_id: id,
         name: "col1".into(),
         ordinal_position: 0,
@@ -259,7 +265,7 @@ async fn table_crud_with_columns() {
 async fn volume_crud() {
     let pool = setup_pool().await;
     let (_, sch_id) = make_schema(&pool, "vol_cat", "vol_sch").await;
-    let id = Uuid::new_v4();
+    let id = Uuid::now_v7();
     let row = VolumeRow {
         id,
         schema_id: sch_id,
@@ -292,7 +298,7 @@ async fn volume_crud() {
 #[tokio::test]
 async fn property_replace_and_get() {
     let pool = setup_pool().await;
-    let entity_id = Uuid::new_v4();
+    let entity_id = Uuid::now_v7();
     let mut props = std::collections::HashMap::new();
     props.insert("k1".to_string(), "v1".to_string());
     props.insert("k2".to_string(), "v2".to_string());
@@ -332,7 +338,7 @@ async fn property_replace_and_get() {
 #[tokio::test]
 async fn user_crud() {
     let pool = setup_pool().await;
-    let id = Uuid::new_v4();
+    let id = Uuid::now_v7();
     user::create(
         &pool,
         id,
@@ -435,7 +441,7 @@ async fn user_find_or_create_by_external_id_distinct_subs_get_distinct_principal
 #[tokio::test]
 async fn credential_crud() {
     let pool = setup_pool().await;
-    let id = Uuid::new_v4();
+    let id = Uuid::now_v7();
     let row = CredentialRow {
         id,
         name: "cred1".into(),
@@ -463,7 +469,7 @@ async fn credential_crud() {
 #[tokio::test]
 async fn external_location_crud() {
     let pool = setup_pool().await;
-    let cred_id = Uuid::new_v4();
+    let cred_id = Uuid::now_v7();
     let cred_row = CredentialRow {
         id: cred_id,
         name: "el_cred".into(),
@@ -479,7 +485,7 @@ async fn external_location_crud() {
     };
     credential::create(&pool, &cred_row).await.unwrap();
 
-    let id = Uuid::new_v4();
+    let id = Uuid::now_v7();
     let row = ExternalLocationRow {
         id,
         name: "el1".into(),
@@ -517,7 +523,7 @@ async fn external_location_crud() {
 async fn staging_table_create_get_commit() {
     let pool = setup_pool().await;
     let (_, sch_id) = make_schema(&pool, "stg_cat", "stg_sch").await;
-    let id = Uuid::new_v4();
+    let id = Uuid::now_v7();
     let row = StagingTableRow {
         id,
         schema_id: sch_id,
@@ -549,7 +555,7 @@ async fn staging_table_create_get_commit() {
 async fn delta_commit_insert_list_latest() {
     let pool = setup_pool().await;
     let (_, sch_id) = make_schema(&pool, "dc_cat", "dc_sch").await;
-    let tbl_id = Uuid::new_v4();
+    let tbl_id = Uuid::now_v7();
     let tbl_row = TableRow {
         id: tbl_id,
         schema_id: sch_id,
@@ -573,7 +579,7 @@ async fn delta_commit_insert_list_latest() {
 
     for v in [1i64, 2, 3] {
         let row = DeltaCommitRow {
-            id: Uuid::new_v4(),
+            id: Uuid::now_v7(),
             table_id: tbl_id,
             commit_version: v,
             commit_filename: format!("{:020}.json", v),
@@ -602,7 +608,7 @@ async fn delta_commit_insert_list_latest() {
 
     // Duplicate version → CommitVersionConflict
     let dup = DeltaCommitRow {
-        id: Uuid::new_v4(),
+        id: Uuid::now_v7(),
         table_id: tbl_id,
         commit_version: 2,
         commit_filename: "dup.json".into(),

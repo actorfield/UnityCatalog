@@ -2,7 +2,9 @@
 //!
 //! Delta commits are partitioned out of the main log, one stream per table:
 //!
-//!     _uc_log/tables/{table_id}/00000000000000000007.json
+//! ```text
+//! _uc_log/tables/{table_id}/00000000000000000007.json
+//! ```
 //!
 //! which is exactly how Delta itself lays out `_delta_log` — one log per table,
 //! not one per metastore.

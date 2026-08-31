@@ -348,8 +348,8 @@ mod tests {
     #[tokio::test]
     async fn allowing_authorizer_always_permits() {
         let auth = AllowingAuthorizer;
-        let p = Uuid::new_v4();
-        let r = Uuid::new_v4();
+        let p = Uuid::now_v7();
+        let r = Uuid::now_v7();
         assert!(auth.authorize(p, r, Privilege::Owner).await.unwrap());
         assert!(auth
             .authorize_any(p, r, &[Privilege::Select, Privilege::Modify])
@@ -360,8 +360,8 @@ mod tests {
     #[tokio::test]
     async fn allowing_authorizer_grant_revoke_are_noops() {
         let auth = AllowingAuthorizer;
-        let p = Uuid::new_v4();
-        let r = Uuid::new_v4();
+        let p = Uuid::now_v7();
+        let r = Uuid::now_v7();
         // should not error
         auth.grant(p, r, Privilege::Owner).await.unwrap();
         auth.revoke(p, r, Privilege::Owner).await.unwrap();
@@ -370,8 +370,8 @@ mod tests {
     #[tokio::test]
     async fn allowing_authorizer_hierarchy_noops() {
         let auth = AllowingAuthorizer;
-        let parent = Uuid::new_v4();
-        let child = Uuid::new_v4();
+        let parent = Uuid::now_v7();
+        let child = Uuid::now_v7();
         auth.add_hierarchy_child(parent, child).await.unwrap();
         auth.remove_hierarchy_children(parent).await.unwrap();
     }
@@ -379,8 +379,8 @@ mod tests {
     #[tokio::test]
     async fn allowing_authorizer_list_returns_empty() {
         let auth = AllowingAuthorizer;
-        let p = Uuid::new_v4();
-        let r = Uuid::new_v4();
+        let p = Uuid::now_v7();
+        let r = Uuid::now_v7();
         let privs = auth.list_privileges(p, r).await.unwrap();
         assert!(
             privs.is_empty(),
@@ -395,8 +395,8 @@ mod tests {
     #[tokio::test]
     async fn init_admin_grants_owner_on_metastore() {
         let auth = UcAuthorizer::new_in_memory().await.unwrap();
-        let admin = Uuid::new_v4();
-        let metastore = Uuid::new_v4();
+        let admin = Uuid::now_v7();
+        let metastore = Uuid::now_v7();
 
         auth.init_admin(admin, metastore).await.unwrap();
 
@@ -411,8 +411,8 @@ mod tests {
     #[tokio::test]
     async fn init_admin_allows_create_catalog_via_authorize_any() {
         let auth = UcAuthorizer::new_in_memory().await.unwrap();
-        let admin = Uuid::new_v4();
-        let metastore = Uuid::new_v4();
+        let admin = Uuid::now_v7();
+        let metastore = Uuid::now_v7();
         auth.init_admin(admin, metastore).await.unwrap();
 
         // Owner implies CreateCatalog in the casbin model
@@ -432,8 +432,8 @@ mod tests {
     #[tokio::test]
     async fn uc_authorizer_grant_and_check() {
         let auth = UcAuthorizer::new_in_memory().await.unwrap();
-        let principal = Uuid::new_v4();
-        let resource = Uuid::new_v4();
+        let principal = Uuid::now_v7();
+        let resource = Uuid::now_v7();
 
         // Initially not authorised
         assert!(!auth
@@ -460,8 +460,8 @@ mod tests {
     #[tokio::test]
     async fn uc_authorizer_revoke() {
         let auth = UcAuthorizer::new_in_memory().await.unwrap();
-        let p = Uuid::new_v4();
-        let r = Uuid::new_v4();
+        let p = Uuid::now_v7();
+        let r = Uuid::now_v7();
         auth.grant(p, r, Privilege::Owner).await.unwrap();
         assert!(auth.authorize(p, r, Privilege::Owner).await.unwrap());
         auth.revoke(p, r, Privilege::Owner).await.unwrap();
@@ -471,8 +471,8 @@ mod tests {
     #[tokio::test]
     async fn uc_authorizer_authorize_any() {
         let auth = UcAuthorizer::new_in_memory().await.unwrap();
-        let p = Uuid::new_v4();
-        let r = Uuid::new_v4();
+        let p = Uuid::now_v7();
+        let r = Uuid::now_v7();
         auth.grant(p, r, Privilege::Select).await.unwrap();
         // authorize_any with Select in list → true
         assert!(auth
@@ -489,8 +489,8 @@ mod tests {
     #[tokio::test]
     async fn uc_authorizer_list_privileges() {
         let auth = UcAuthorizer::new_in_memory().await.unwrap();
-        let p = Uuid::new_v4();
-        let r = Uuid::new_v4();
+        let p = Uuid::now_v7();
+        let r = Uuid::now_v7();
         auth.grant(p, r, Privilege::Select).await.unwrap();
         auth.grant(p, r, Privilege::Modify).await.unwrap();
         let privs = auth.list_privileges(p, r).await.unwrap();
@@ -502,9 +502,9 @@ mod tests {
     #[tokio::test]
     async fn uc_authorizer_list_grants_on_resource() {
         let auth = UcAuthorizer::new_in_memory().await.unwrap();
-        let p1 = Uuid::new_v4();
-        let p2 = Uuid::new_v4();
-        let r = Uuid::new_v4();
+        let p1 = Uuid::now_v7();
+        let p2 = Uuid::now_v7();
+        let r = Uuid::now_v7();
         auth.grant(p1, r, Privilege::Owner).await.unwrap();
         auth.grant(p2, r, Privilege::Select).await.unwrap();
         let grants = auth.list_grants_on_resource(r).await.unwrap();
@@ -514,8 +514,8 @@ mod tests {
     #[tokio::test]
     async fn uc_authorizer_hierarchy() {
         let auth = UcAuthorizer::new_in_memory().await.unwrap();
-        let parent = Uuid::new_v4();
-        let child = Uuid::new_v4();
+        let parent = Uuid::now_v7();
+        let child = Uuid::now_v7();
         // Should not error
         auth.add_hierarchy_child(parent, child).await.unwrap();
         auth.remove_hierarchy_children(parent).await.unwrap();
@@ -526,8 +526,8 @@ mod tests {
     #[tokio::test]
     async fn owner_implies_all_specific_privileges() {
         let auth = UcAuthorizer::new_in_memory().await.unwrap();
-        let p = Uuid::new_v4();
-        let r = Uuid::new_v4();
+        let p = Uuid::now_v7();
+        let r = Uuid::now_v7();
         auth.grant(p, r, Privilege::Owner).await.unwrap();
         for req in [
             Privilege::Select,
@@ -548,8 +548,8 @@ mod tests {
     #[tokio::test]
     async fn all_privileges_implies_specifics_but_not_owner() {
         let auth = UcAuthorizer::new_in_memory().await.unwrap();
-        let p = Uuid::new_v4();
-        let r = Uuid::new_v4();
+        let p = Uuid::now_v7();
+        let r = Uuid::now_v7();
         auth.grant(p, r, Privilege::AllPrivileges).await.unwrap();
         assert!(auth.authorize(p, r, Privilege::Select).await.unwrap());
         assert!(auth.authorize(p, r, Privilege::Modify).await.unwrap());
@@ -560,8 +560,8 @@ mod tests {
     #[tokio::test]
     async fn specific_grant_does_not_imply_others() {
         let auth = UcAuthorizer::new_in_memory().await.unwrap();
-        let p = Uuid::new_v4();
-        let r = Uuid::new_v4();
+        let p = Uuid::now_v7();
+        let r = Uuid::now_v7();
         auth.grant(p, r, Privilege::Select).await.unwrap();
         assert!(auth.authorize(p, r, Privilege::Select).await.unwrap());
         assert!(!auth.authorize(p, r, Privilege::Modify).await.unwrap());
@@ -573,10 +573,10 @@ mod tests {
     #[tokio::test]
     async fn owner_cascades_down_object_hierarchy() {
         let auth = UcAuthorizer::new_in_memory().await.unwrap();
-        let user = Uuid::new_v4();
-        let catalog = Uuid::new_v4();
-        let schema = Uuid::new_v4();
-        let table = Uuid::new_v4();
+        let user = Uuid::now_v7();
+        let catalog = Uuid::now_v7();
+        let schema = Uuid::now_v7();
+        let table = Uuid::now_v7();
         auth.add_hierarchy_child(catalog, schema).await.unwrap();
         auth.add_hierarchy_child(schema, table).await.unwrap();
         auth.grant(user, catalog, Privilege::Owner).await.unwrap();
@@ -598,18 +598,18 @@ mod tests {
     #[tokio::test]
     async fn grant_on_parent_covers_child_not_upward() {
         let auth = UcAuthorizer::new_in_memory().await.unwrap();
-        let schema = Uuid::new_v4();
-        let table = Uuid::new_v4();
+        let schema = Uuid::now_v7();
+        let table = Uuid::now_v7();
         auth.add_hierarchy_child(schema, table).await.unwrap();
         // SELECT on the schema covers the child table (downward inheritance).
-        let owner = Uuid::new_v4();
+        let owner = Uuid::now_v7();
         auth.grant(owner, schema, Privilege::Select).await.unwrap();
         assert!(auth
             .authorize(owner, table, Privilege::Select)
             .await
             .unwrap());
         // A grant on the child must NOT leak upward to the parent.
-        let other = Uuid::new_v4();
+        let other = Uuid::now_v7();
         auth.grant(other, table, Privilege::Select).await.unwrap();
         assert!(!auth
             .authorize(other, schema, Privilege::Select)

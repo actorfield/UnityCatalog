@@ -38,7 +38,7 @@ pub async fn create(
         require(&state, user.id, schema.id, Privilege::CreateFunction).await?;
     }
     validate_sql_name(&fi.name)?;
-    let id = Uuid::new_v4();
+    let id = Uuid::now_v7();
     let now = now_ms();
     let row = FunctionRow {
         id,
@@ -73,7 +73,7 @@ pub async fn create(
                 .iter()
                 .enumerate()
                 .map(|(i, p)| FunctionParamRow {
-                    id: Uuid::new_v4(),
+                    id: Uuid::now_v7(),
                     function_id: id,
                     name: p.name.clone(),
                     input_or_return: 0,

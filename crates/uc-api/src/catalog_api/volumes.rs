@@ -38,7 +38,7 @@ pub async fn create(
         require(&state, user.id, schema.id, Privilege::CreateVolume).await?;
     }
     validate_sql_name(&req.name)?;
-    let id = Uuid::new_v4();
+    let id = Uuid::now_v7();
     let now = now_ms();
     // #1143: MANAGED volumes auto-derive storage_location from storage_root hierarchy
     let storage_location = match req.volume_type {

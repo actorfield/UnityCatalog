@@ -31,7 +31,7 @@ pub async fn create(
         require(&state, user.id, catalog.id, Privilege::CreateSchema).await?;
     }
     validate_sql_name(&req.name)?;
-    let id = Uuid::new_v4();
+    let id = Uuid::now_v7();
     let now = chrono::Utc::now().timestamp_millis();
     let row = schema::create(
         &state.pool,

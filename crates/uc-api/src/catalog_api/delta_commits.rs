@@ -81,7 +81,7 @@ pub async fn commit(
     let table = table::get_by_schema_and_name(&state.pool, schema.id, parts[2]).await?;
 
     let row = DeltaCommitRow {
-        id: Uuid::new_v4(),
+        id: Uuid::now_v7(),
         table_id: table.id,
         commit_version: req.version,
         commit_filename: req

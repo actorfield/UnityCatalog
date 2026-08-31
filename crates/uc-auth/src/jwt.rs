@@ -47,7 +47,7 @@ impl UcClaims {
             sub: sub.into(),
             iss: "internal".to_string(),
             iat: chrono::Utc::now().timestamp(),
-            jti: Uuid::new_v4().to_string(),
+            jti: Uuid::now_v7().to_string(),
             token_type: TokenType::Access,
         }
     }
@@ -57,7 +57,7 @@ impl UcClaims {
             sub: "uc_service".to_string(),
             iss: "internal".to_string(),
             iat: chrono::Utc::now().timestamp(),
-            jti: Uuid::new_v4().to_string(),
+            jti: Uuid::now_v7().to_string(),
             token_type: TokenType::Service,
         }
     }

@@ -21,7 +21,7 @@ pub async fn create_staging_table(
     Json(req): Json<DeltaCreateStagingTableRequest>,
 ) -> Result<Json<DeltaStagingTableResponse>, UcError> {
     let schema_row = schema::get_by_full_name(&state.pool, &catalog, &schema).await?;
-    let id = Uuid::new_v4();
+    let id = Uuid::now_v7();
     let now = chrono::Utc::now().timestamp_millis();
     let loc = format!("file:///tmp/uc/staging/{}", id);
     let row = StagingTableRow {
@@ -57,7 +57,7 @@ pub async fn create_table(
     Json(req): Json<DeltaCreateTableRequest>,
 ) -> Result<Json<DeltaLoadTableResponse>, UcError> {
     let schema_row = schema::get_by_full_name(&state.pool, &catalog, &schema).await?;
-    let id = Uuid::new_v4();
+    let id = Uuid::now_v7();
     let now = chrono::Utc::now().timestamp_millis();
     let table_type = req
         .table_type
@@ -191,7 +191,7 @@ pub async fn update_table(
                     ));
                 }
                 let commit_row = uc_db::models::delta::DeltaCommitRow {
-                    id: Uuid::new_v4(),
+                    id: Uuid::now_v7(),
                     table_id: row.id,
                     commit_version: commit.version,
                     commit_filename: commit.file_name.clone(),
@@ -229,7 +229,7 @@ pub async fn update_table(
                 sqlx::query(
                     "INSERT OR REPLACE INTO uc_properties (id, entity_id, entity_type, property_key, property_value) VALUES ($1,$2,'table','__delta_schema__',$3)"
                 )
-                .bind(Uuid::new_v4()).bind(row.id).bind(&col_json)
+                .bind(Uuid::now_v7()).bind(row.id).bind(&col_json)
                 .execute(state.pool.as_ref()).await.map_err(crate::db_err)?;
             }
             DeltaTableUpdate::SetTableComment { comment } => {
@@ -246,7 +246,7 @@ pub async fn update_table(
                 sqlx::query(
                     "INSERT OR REPLACE INTO uc_properties (id, entity_id, entity_type, property_key, property_value) VALUES ($1,$2,'table','__delta_partition_cols__',$3)"
                 )
-                .bind(Uuid::new_v4()).bind(row.id).bind(&json)
+                .bind(Uuid::now_v7()).bind(row.id).bind(&json)
                 .execute(state.pool.as_ref()).await.map_err(crate::db_err)?;
             }
             DeltaTableUpdate::SetProtocol { protocol } => {
@@ -254,12 +254,12 @@ pub async fn update_table(
                 sqlx::query(
                     "INSERT OR REPLACE INTO uc_properties (id, entity_id, entity_type, property_key, property_value) VALUES ($1,$2,'table','delta.minReaderVersion',$3)"
                 )
-                .bind(Uuid::new_v4()).bind(row.id).bind(protocol.min_reader_version.to_string())
+                .bind(Uuid::now_v7()).bind(row.id).bind(protocol.min_reader_version.to_string())
                 .execute(state.pool.as_ref()).await.map_err(crate::db_err)?;
                 sqlx::query(
                     "INSERT OR REPLACE INTO uc_properties (id, entity_id, entity_type, property_key, property_value) VALUES ($1,$2,'table','delta.minWriterVersion',$3)"
                 )
-                .bind(Uuid::new_v4()).bind(row.id).bind(protocol.min_writer_version.to_string())
+                .bind(Uuid::now_v7()).bind(row.id).bind(protocol.min_writer_version.to_string())
                 .execute(state.pool.as_ref()).await.map_err(crate::db_err)?;
             }
             DeltaTableUpdate::SetDomainMetadata { updates } => {
@@ -267,7 +267,7 @@ pub async fn update_table(
                 sqlx::query(
                     "INSERT OR REPLACE INTO uc_properties (id, entity_id, entity_type, property_key, property_value) VALUES ($1,$2,'table','__delta_domain_metadata__',$3)"
                 )
-                .bind(Uuid::new_v4()).bind(row.id).bind(&json)
+                .bind(Uuid::now_v7()).bind(row.id).bind(&json)
                 .execute(state.pool.as_ref()).await.map_err(crate::db_err)?;
             }
             DeltaTableUpdate::RemoveDomainMetadata { domains } => {

@@ -45,7 +45,7 @@ pub async fn replace(
             "INSERT INTO uc_properties (id, entity_id, entity_type, property_key, property_value)
                  VALUES ($1, $2, $3, $4, $5)",
         )
-        .bind(Uuid::new_v4())
+        .bind(Uuid::now_v7())
         .bind(entity_id)
         .bind(entity_type)
         .bind(key)

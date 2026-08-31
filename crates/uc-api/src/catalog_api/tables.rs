@@ -98,7 +98,7 @@ pub async fn create(
                     &req.schema_name,
                 )
                 .await?;
-                let new_id = Uuid::new_v4();
+                let new_id = Uuid::now_v7();
                 let loc = managed_storage::managed_table_location(&root, schema.id, new_id);
                 (new_id, loc)
             };
@@ -107,7 +107,7 @@ pub async fn create(
         }
         _ => {
             // EXTERNAL / VIEW — use provided storage_location as-is
-            (Uuid::new_v4(), req.storage_location.clone())
+            (Uuid::now_v7(), req.storage_location.clone())
         }
     };
 
@@ -141,7 +141,7 @@ pub async fn create(
             .iter()
             .enumerate()
             .map(|(i, c)| ColumnRow {
-                id: Uuid::new_v4(),
+                id: Uuid::now_v7(),
                 table_id: id,
                 name: c.name.clone(),
                 ordinal_position: i as i32,

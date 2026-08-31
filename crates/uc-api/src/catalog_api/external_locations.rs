@@ -52,7 +52,7 @@ pub async fn create(
             .await?;
         }
     }
-    let id = Uuid::new_v4();
+    let id = Uuid::now_v7();
     let row = ExternalLocationRow {
         id,
         name: req.name.clone(),

@@ -13,7 +13,7 @@ pub async fn get_or_init(pool: &AnyPool, name: &str) -> Result<MetastoreRow, UcE
         return Ok(row);
     }
 
-    let id = Uuid::new_v4();
+    let id = Uuid::now_v7();
     sqlx::query_as::<_, MetastoreRow>(
         "INSERT INTO uc_metastore (id, name) VALUES ($1, $2) RETURNING *",
     )

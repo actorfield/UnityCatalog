@@ -296,8 +296,8 @@ mod tests {
     async fn policies_survive_restart() {
         let pool = in_memory_sqlite().await;
 
-        let principal = Uuid::new_v4();
-        let resource = Uuid::new_v4();
+        let principal = Uuid::now_v7();
+        let resource = Uuid::now_v7();
 
         // First "run" — grant Owner
         let auth1 = UcAuthorizer::new_with_db(pool.clone()).await.unwrap();
@@ -325,8 +325,8 @@ mod tests {
     async fn create_catalog_allowed_for_metastore_owner_after_restart() {
         let pool = in_memory_sqlite().await;
 
-        let admin = Uuid::new_v4();
-        let metastore = Uuid::new_v4();
+        let admin = Uuid::now_v7();
+        let metastore = Uuid::now_v7();
 
         let auth1 = UcAuthorizer::new_with_db(pool.clone()).await.unwrap();
         auth1
@@ -361,8 +361,8 @@ mod tests {
     async fn owner_implies_specific_privilege_via_g3_after_restart() {
         let pool = in_memory_sqlite().await;
 
-        let principal = Uuid::new_v4();
-        let catalog = Uuid::new_v4();
+        let principal = Uuid::now_v7();
+        let catalog = Uuid::now_v7();
 
         let auth1 = UcAuthorizer::new_with_db(pool.clone()).await.unwrap();
         auth1
@@ -397,9 +397,9 @@ mod tests {
     #[tokio::test]
     async fn save_policy_snapshot_preserves_g2_and_g3() {
         let pool = in_memory_sqlite().await;
-        let principal = Uuid::new_v4();
-        let catalog = Uuid::new_v4();
-        let schema = Uuid::new_v4();
+        let principal = Uuid::now_v7();
+        let catalog = Uuid::now_v7();
+        let schema = Uuid::now_v7();
 
         let auth1 = UcAuthorizer::new_with_db(pool.clone()).await.unwrap();
         auth1

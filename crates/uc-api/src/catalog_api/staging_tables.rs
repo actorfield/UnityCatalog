@@ -24,7 +24,7 @@ pub async fn create(
         require(&state, user.id, schema.id, Privilege::CreateTable).await?;
     }
 
-    let id = Uuid::new_v4();
+    let id = Uuid::now_v7();
     let now = now_ms();
 
     // Derive staging location from storage_root hierarchy (schema → catalog → error)

@@ -33,7 +33,7 @@ pub async fn build_test_app() -> (Router, AnyPool) {
         .expect("metastore init");
 
     // Write keys to a temp dir so JWKS endpoint can serve certs.json
-    let config_dir = std::env::temp_dir().join(format!("uc_test_{}", uuid::Uuid::new_v4()));
+    let config_dir = std::env::temp_dir().join(format!("uc_test_{}", uuid::Uuid::now_v7()));
     std::fs::create_dir_all(&config_dir).expect("create config dir");
     let km = KeyManager::load_or_generate(&config_dir).expect("key gen");
     let jwt_config =

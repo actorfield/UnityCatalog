@@ -36,7 +36,7 @@ pub async fn create(
         )
         .await?;
     }
-    let id = Uuid::new_v4();
+    let id = Uuid::now_v7();
     let now = now_ms();
     let credential_json = serde_json::to_string(&req.aws_iam_role).unwrap_or_default();
     let row = CredentialRow {

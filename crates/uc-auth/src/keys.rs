@@ -133,7 +133,7 @@ mod tests {
 
     #[test]
     fn load_or_generate_creates_files_on_first_run() {
-        let dir = std::env::temp_dir().join(format!("uc_keys_test_{}", uuid::Uuid::new_v4()));
+        let dir = std::env::temp_dir().join(format!("uc_keys_test_{}", uuid::Uuid::now_v7()));
         std::fs::create_dir_all(&dir).unwrap();
 
         let km = KeyManager::load_or_generate(&dir).unwrap();
@@ -152,7 +152,7 @@ mod tests {
 
     #[test]
     fn certs_json_contains_valid_base64url_n() {
-        let dir = std::env::temp_dir().join(format!("uc_keys_certs_{}", uuid::Uuid::new_v4()));
+        let dir = std::env::temp_dir().join(format!("uc_keys_certs_{}", uuid::Uuid::now_v7()));
         std::fs::create_dir_all(&dir).unwrap();
         KeyManager::load_or_generate(&dir).unwrap();
 

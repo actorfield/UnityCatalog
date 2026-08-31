@@ -52,7 +52,7 @@ fn catalog(name: &str) -> serde_json::Value {
 }
 
 pub(super) async fn put_catalog_helper(store: &Store, name: &str) -> Result<Uuid, UcError> {
-    let id = Uuid::new_v4();
+    let id = Uuid::now_v7();
     store
         .commit("CREATE CATALOG", |snap| {
             if snap.get_by_natural_key(EntityKind::Catalog, name).is_some() {
@@ -315,7 +315,7 @@ fn delta_row(table_id: Uuid, version: i64) -> Vec<u8> {
 async fn a_delta_commit_conflict_is_the_object_key_not_a_constraint() {
     let log = Arc::new(MemLog::default());
     let store = Store::open(log).await.unwrap();
-    let t = Uuid::new_v4();
+    let t = Uuid::now_v7();
 
     store.delta.append(t, 0, delta_row(t, 0)).await.unwrap();
     let err = store.delta.append(t, 0, delta_row(t, 0)).await.unwrap_err();
@@ -328,7 +328,7 @@ async fn a_delta_commit_conflict_is_the_object_key_not_a_constraint() {
 async fn commits_to_different_tables_do_not_serialise_against_each_other() {
     let log = Arc::new(MemLog::default());
     let store = Store::open(log.clone()).await.unwrap();
-    let (a, b) = (Uuid::new_v4(), Uuid::new_v4());
+    let (a, b) = (Uuid::now_v7(), Uuid::now_v7());
 
     for v in 0..5 {
         store.delta.append(a, v, delta_row(a, v)).await.unwrap();
@@ -353,7 +353,7 @@ async fn commits_to_different_tables_do_not_serialise_against_each_other() {
 async fn version_ranges_are_inclusive_at_both_ends() {
     let log = Arc::new(MemLog::default());
     let store = Store::open(log).await.unwrap();
-    let t = Uuid::new_v4();
+    let t = Uuid::now_v7();
     for v in 0..10 {
         store.delta.append(t, v, delta_row(t, v)).await.unwrap();
     }
@@ -371,7 +371,7 @@ async fn version_ranges_are_inclusive_at_both_ends() {
 async fn a_table_with_no_commits_has_no_latest_version() {
     let log = Arc::new(MemLog::default());
     let store = Store::open(log).await.unwrap();
-    assert_eq!(store.delta.latest_version(Uuid::new_v4()).await.unwrap(), None);
+    assert_eq!(store.delta.latest_version(Uuid::now_v7()).await.unwrap(), None);
 }
 
 /// The hint is an optimisation, never a source of truth: a replica that never
@@ -381,7 +381,7 @@ async fn a_stale_latest_hint_is_corrected_by_listing() {
     let log = Arc::new(MemLog::default());
     let a = Store::open(log.clone()).await.unwrap();
     let b = Store::open(log).await.unwrap();
-    let t = Uuid::new_v4();
+    let t = Uuid::now_v7();
 
     a.delta.append(t, 0, delta_row(t, 0)).await.unwrap();
     assert_eq!(b.delta.latest_version(t).await.unwrap(), Some(0));
@@ -405,7 +405,7 @@ async fn delta_partitions_do_not_corrupt_metastore_replay() {
     let store = Store::open(log.clone()).await.unwrap();
     put_catalog(&store, "alpha").await.unwrap();
 
-    let t = Uuid::new_v4();
+    let t = Uuid::now_v7();
     for v in 0..3 {
         store.delta.append(t, v, delta_row(t, v)).await.unwrap();
     }
@@ -470,7 +470,7 @@ async fn main_log_replays_fully_against_a_paginating_backend() {
 async fn delta_latest_version_is_correct_against_a_paginating_backend() {
     let log = truncating(10);
     let store = Store::open(log.clone()).await.unwrap();
-    let t = Uuid::new_v4();
+    let t = Uuid::now_v7();
     for v in 0..25 {
         store.delta.append(t, v, delta_row(t, v)).await.unwrap();
     }
@@ -540,7 +540,7 @@ fn user_is_keyed_on_name_not_email() {
 #[test]
 fn columns_are_keyed_by_table_and_ordinal() {
     // UNIQUE(table_id, ordinal_position)
-    let t = Uuid::new_v4();
+    let t = Uuid::now_v7();
     let col = |n: i64| serde_json::json!({"table_id": t, "ordinal_position": n});
     let k = |n: i64| natural_key_for(EntityKind::Column, &col(n)).unwrap();
 
@@ -552,7 +552,7 @@ fn columns_are_keyed_by_table_and_ordinal() {
 #[test]
 fn properties_are_keyed_by_entity_and_key() {
     // UNIQUE(entity_id, entity_type, property_key)
-    let e = Uuid::new_v4();
+    let e = Uuid::now_v7();
     let p = |ty: &str, key: &str| {
         serde_json::json!({"entity_id": e, "entity_type": ty, "property_key": key})
     };
@@ -660,7 +660,7 @@ async fn a_bounded_range_does_not_page_the_whole_partition() {
         lists: std::sync::atomic::AtomicUsize::new(0),
     });
     let store = Store::open(log.clone()).await.unwrap();
-    let t = Uuid::new_v4();
+    let t = Uuid::now_v7();
     for v in 0..200 {
         store.delta.append(t, v, delta_row(t, v)).await.unwrap();
     }
