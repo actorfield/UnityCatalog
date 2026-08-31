@@ -49,8 +49,10 @@ Modelled directly on `_delta_log`:
       00000000000000000002.json
       ...
       00000000000000000200.checkpoint.json
-      _last_checkpoint                  {"version": 200, "size": 1483}
-      _keys.json                        JWT signing keypair, conditionally created
+      _last_checkpoint                  {"version": 200, "size": 1483, "checksum": …}
+
+No key material. The signing keypair is supplied by `--key-file` from a secret
+store and is never written here — see "Key material comes from a secret store".
 
 20-digit zero-padded versions so lexicographic LIST order equals numeric order.
 
@@ -155,9 +157,10 @@ Delete the PVC without moving these and every restart generates a fresh keypair:
 all outstanding UC tokens become invalid and the JWKS `kid` rotates. It fails at
 runtime for clients, not at startup, so it will not show up in a smoke test.
 
-Keys move to `_keys.json` via the same conditional create — first boot is a
-race between replicas, and PUT-if-absent makes the loser adopt the winner's key
-instead of generating its own.
+Keys move to a Kubernetes Secret, mounted and passed as `--key-file`. An
+earlier revision put them in the object store via a conditional create; that is
+gone, because UC vends bucket-scoped credentials with no session policy and a
+private key in that bucket would be readable by anything holding one.
 
 ## Rejected: Raft
 
@@ -387,6 +390,38 @@ claim, and the right one to make in the docs rather than in a footnote.
 
 `catch_up` holds the write lock across its listing, so readers block for its
 duration. Fine for a metadata log; not a pattern to copy onto a hot path.
+
+## Status
+
+  1. `store/` module: actions, log, replay, checkpoint, in-memory indices   DONE
+  2. port repos/catalog.rs as the worked example                            DONE
+  3. port the remaining 12 repo modules                                     DONE
+  4. port the 19 direct sqlx sites in uc-api                                DONE
+  5. casbin policy off the pool                                             DONE
+  6. key material out of the PVC                                            DONE
+     (landed as `--key-file` from a secret store, *not* the object store —
+      see below; the original plan for this step was unsafe)
+  7a. uc-server: `--storage-root`, `S3Log`, `--key-file`                    DONE
+  7b. drop the PVC from the operator                                        NOT DONE
+      Lives in a separate repo that is running in production and has not been
+      touched. Needs: a Secret populated from `--generate-key-file`, a
+      `--key-file` mount, `--storage-root` in place of `--database-url`, the
+      PVC removed, and the image built with `--features logstore`.
+  8. rename `AnyPool` -> `Store`                                            RETIRED
+     It assumed the log store would replace SQL outright. Both backends are
+     supported and tested, so `AnyPool` is the accurate name.
+
+Nothing here has been deployed. Steps 1-7a keep the SQLite build working behind
+a feature flag, and 7b is the only irreversible move.
+
+Not attempted, and deliberately out of scope for v1:
+
+  - **Log pruning.** Old commits below a checkpoint are never deleted, so the
+    log grows without bound. Safe but not free.
+  - **Multi-replica in production.** Writes are proven safe; reads are only
+    eventually consistent, bounded by `--refresh-interval-secs`.
+  - **Postgres + logstore.** `logstore` supersedes the SQL backends rather than
+    combining with them; the combination is meaningless, not merely untested.
 
 ## Prerequisite found while sketching
 
