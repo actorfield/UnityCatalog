@@ -414,3 +414,103 @@ async fn delta_partitions_do_not_corrupt_metastore_replay() {
     assert_eq!(snap.version, 1, "only the catalog commit counts");
     assert!(snap.get_by_natural_key(EntityKind::Catalog, "alpha").is_some());
 }
+
+// ── paginated backends ──────────────────────────────────────────────────────
+
+/// Mimics S3 ListObjectsV2, which caps a response at 1000 keys. Every listing
+/// here returns at most `page` keys, so any caller that treats one call as the
+/// complete set gets a silently short answer.
+///
+/// Tail truncation is the dangerous shape: keys 1..N of a longer log are
+/// perfectly contiguous, so the gap check cannot see it. Before
+/// `list_all_after`, all three of these returned wrong answers with no error.
+struct TruncatingLog {
+    inner: MemLog,
+    page: usize,
+}
+
+#[async_trait::async_trait]
+impl ObjectLog for TruncatingLog {
+    async fn put_if_absent(&self, key: &str, body: Vec<u8>) -> Result<PutResult, UcError> {
+        self.inner.put_if_absent(key, body).await
+    }
+    async fn get(&self, key: &str) -> Result<Option<Vec<u8>>, UcError> {
+        self.inner.get(key).await
+    }
+    async fn list_after(&self, prefix: &str, start_after: &str) -> Result<Vec<String>, UcError> {
+        let mut keys = self.inner.list_after(prefix, start_after).await?;
+        keys.truncate(self.page);
+        Ok(keys)
+    }
+    async fn put(&self, key: &str, body: Vec<u8>) -> Result<(), UcError> {
+        self.inner.put(key, body).await
+    }
+}
+
+fn truncating(page: usize) -> Arc<TruncatingLog> {
+    Arc::new(TruncatingLog { inner: MemLog::default(), page })
+}
+
+#[tokio::test]
+async fn main_log_replays_fully_against_a_paginating_backend() {
+    let log = truncating(10);
+    let store = Store::open(log.clone()).await.unwrap();
+    for i in 0..25 {
+        put_catalog(&store, &format!("cat{i:03}")).await.unwrap();
+    }
+
+    let cold = Store::open(log).await.unwrap();
+    let snap = cold.snapshot().await;
+    assert_eq!(snap.version, 25, "replay must page, not stop at the first page");
+    assert!(snap.get_by_natural_key(EntityKind::Catalog, "cat024").is_some());
+}
+
+#[tokio::test]
+async fn delta_latest_version_is_correct_against_a_paginating_backend() {
+    let log = truncating(10);
+    let store = Store::open(log.clone()).await.unwrap();
+    let t = Uuid::new_v4();
+    for v in 0..25 {
+        store.delta.append(t, v, delta_row(t, v)).await.unwrap();
+    }
+
+    // A cold replica has no hint, so it lists the whole partition from zero --
+    // the case a single page would truncate. A short answer here would make a
+    // Delta client commit at a version that already exists.
+    let cold = Store::open(log).await.unwrap();
+    assert_eq!(cold.delta.latest_version(t).await.unwrap(), Some(24));
+    assert_eq!(cold.delta.versions(t, None, None).await.unwrap().len(), 25);
+}
+
+#[tokio::test]
+async fn a_backend_that_ignores_start_after_is_refused_not_looped_forever() {
+    struct IgnoresStartAfter(MemLog);
+
+    #[async_trait::async_trait]
+    impl ObjectLog for IgnoresStartAfter {
+        async fn put_if_absent(&self, k: &str, b: Vec<u8>) -> Result<PutResult, UcError> {
+            self.0.put_if_absent(k, b).await
+        }
+        async fn get(&self, k: &str) -> Result<Option<Vec<u8>>, UcError> {
+            self.0.get(k).await
+        }
+        async fn list_after(&self, prefix: &str, _after: &str) -> Result<Vec<String>, UcError> {
+            self.0.list_after(prefix, "").await
+        }
+        async fn put(&self, k: &str, b: Vec<u8>) -> Result<(), UcError> {
+            self.0.put(k, b).await
+        }
+    }
+
+    let seed = MemLog::default();
+    seed.put_if_absent(&action::commit_key(1), b"{}".to_vec()).await.unwrap();
+    let log = Arc::new(IgnoresStartAfter(seed));
+
+    match Store::open(log).await {
+        Err(e) => assert!(
+            format!("{e:?}").contains("start_after"),
+            "must name the broken contract: {e:?}"
+        ),
+        Ok(_) => panic!("a backend that ignores start_after must be refused"),
+    }
+}

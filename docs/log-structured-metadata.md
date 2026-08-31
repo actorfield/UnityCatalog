@@ -226,6 +226,33 @@ snapshot as metadata. Covered by
 `per_table_partitions_are_not_mistaken_for_main_log_commits` and
 `delta_partitions_do_not_corrupt_metastore_replay`.
 
+## Listings must be drained, not trusted
+
+The nastiest failure this design has. `ObjectLog::list_after` maps onto S3
+ListObjectsV2, which caps a response at 1000 keys. A backend adapter that
+returns one page — the obvious way to write it — silently corrupts three paths:
+
+  - main-log replay stops at the first page, so a restarted uc-server serves a
+    stale, partial metastore;
+  - `latest_version` returns a version lower than the true head, so a Delta
+    client commits at a version that already exists;
+  - `list_for_table` returns a truncated commit history as if complete.
+
+None of it errors. The gap check does not catch it either: keys 1..N of a longer
+log are perfectly contiguous, so tail truncation looks exactly like a shorter
+log. Verified by writing a `TruncatingLog` that pages at 10 — replay reported
+version 10 of 25, and `latest_version` reported 9 of 24, both silently.
+
+The fix is `log::list_all_after`, which pages until a listing comes back empty.
+Every caller goes through it; a truncating backend then costs extra round trips
+instead of correctness. It also refuses a backend that ignores `start_after`
+rather than looping forever on it.
+
+The contract is now stated on the trait: `list_after` MAY return a partial page,
+and no caller may treat one call as the complete set. Stating it was not enough
+on its own — the safeguard has to be in the shared helper, because a doc comment
+does not survive the next implementor.
+
 ## Open question: read freshness
 
 Once there is more than one replica, replica B serves stale reads until it

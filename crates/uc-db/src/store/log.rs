@@ -33,6 +33,12 @@ pub trait ObjectLog: Send + Sync {
 
     /// Keys under `prefix` sorting strictly after `start_after`, lexicographic.
     /// Order is load-bearing (see `action::commit_key`).
+    ///
+    /// MAY return a partial page. Real backends paginate — S3 ListObjectsV2
+    /// caps at 1000 keys — so callers must never treat one call's result as
+    /// the complete set. Use `list_all_after`, which drives the listing to
+    /// exhaustion; a truncating backend then costs extra round trips instead
+    /// of correctness.
     async fn list_after(&self, prefix: &str, start_after: &str) -> Result<Vec<String>, UcError>;
 
     /// Unconditional overwrite. Only for `_last_checkpoint`, which is advisory.
@@ -54,12 +60,44 @@ pub struct LastCheckpoint {
     pub size: u64,
 }
 
+/// Every key under `prefix` after `start_after`, paging until exhausted.
+///
+/// This exists because a truncated listing is otherwise undetectable and
+/// silently wrong. Tail truncation does not even trip the gap check below: keys
+/// 1..N of a longer log are perfectly contiguous, so replay stops early and
+/// materialises a stale snapshot with no error. Draining the listing here is
+/// the only place that can be fixed once for every caller.
+pub async fn list_all_after(
+    log: &dyn ObjectLog,
+    prefix: &str,
+    start_after: &str,
+) -> Result<Vec<String>, UcError> {
+    let mut all: Vec<String> = Vec::new();
+    let mut cursor = start_after.to_string();
+    loop {
+        let page = log.list_after(prefix, &cursor).await?;
+        let Some(last) = page.last().cloned() else {
+            return Ok(all);
+        };
+        // A backend that ignores start_after would loop forever; refuse rather
+        // than spin.
+        if last <= cursor {
+            return Err(UcError::new(
+                ErrorCode::Internal,
+                format!("object log ignored start_after: {last:?} <= {cursor:?}"),
+            ));
+        }
+        cursor = last;
+        all.extend(page);
+    }
+}
+
 /// Read commits strictly after `from_version`, in order.
 pub async fn read_commits_after(
     log: &dyn ObjectLog,
     from_version: u64,
 ) -> Result<Vec<(u64, CommitInfo, Vec<Action>)>, UcError> {
-    let keys = log.list_after("_uc_log/", &commit_key(from_version)).await?;
+    let keys = list_all_after(log, "_uc_log/", &commit_key(from_version)).await?;
     let mut out = Vec::new();
     for key in keys {
         let Some(version) = version_from_key(&key) else {

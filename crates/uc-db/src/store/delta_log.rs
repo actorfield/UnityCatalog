@@ -29,7 +29,7 @@
 //! than something that has to be detected. Nothing about a table's commit
 //! history needs to be in memory.
 
-use super::log::{ObjectLog, PutResult};
+use super::log::{list_all_after, ObjectLog, PutResult};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
@@ -103,14 +103,16 @@ impl DeltaLog {
     ) -> Result<Vec<i64>, UcError> {
         let prefix = partition_prefix(table_id);
         // `start_after` is exclusive, so step back one to make `starting`
-        // inclusive as the SQL's `commit_version >= $2` was.
+        // inclusive as the SQL's `commit_version >= $2` was. At v == 0 this
+        // formats as "-0000000000000000001", and '-' (0x2D) sorts below '0'
+        // (0x30), so it lands before version 0 rather than after it. That is
+        // correct but only by accident of ASCII, so pin it explicitly instead.
         let after = match starting {
+            Some(v) if v <= 0 => prefix.clone(),
             Some(v) => commit_key(table_id, v - 1),
             None => prefix.clone(),
         };
-        let mut versions: Vec<i64> = self
-            .log
-            .list_after(&prefix, &after)
+        let mut versions: Vec<i64> = list_all_after(&*self.log, &prefix, &after)
             .await?
             .iter()
             .filter_map(|k| version_from_key(k))
@@ -136,9 +138,7 @@ impl DeltaLog {
             Some(v) => commit_key(table_id, v),
             None => prefix.clone(),
         };
-        let beyond = self
-            .log
-            .list_after(&prefix, &after)
+        let beyond = list_all_after(&*self.log, &prefix, &after)
             .await?
             .iter()
             .filter_map(|k| version_from_key(k))
@@ -150,7 +150,12 @@ impl DeltaLog {
             (None, None) => None,
         };
         if let Some(v) = latest {
-            self.latest_hint.write().await.insert(table_id, v);
+            // max, not insert: concurrent callers can compute different answers
+            // and finish out of order. A hint that goes backwards is safe (it
+            // only costs a longer listing) but there is no reason to allow it.
+            let mut hint = self.latest_hint.write().await;
+            let entry = hint.entry(table_id).or_insert(v);
+            *entry = (*entry).max(v);
         }
         Ok(latest)
     }
