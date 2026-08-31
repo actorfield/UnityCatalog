@@ -313,6 +313,55 @@ once the metastore exists, and it runs on every startup; writing an empty commit
 would burn a log version and an object each time, growing the log forever
 without changing state.
 
+## What guards against corruption
+
+Layered, and worth being precise about what each layer does and does not cover.
+
+**The object store carries transfer and at-rest integrity.** S3 and MinIO
+checksum uploads and validate on read; a silently corrupted object is their
+problem, not something to re-solve here. Conditional PUT is also atomic, so
+there is no such thing as a half-written commit to detect.
+
+**Commits are validated structurally, not by checksum:**
+
+  - every line must parse as JSON — a malformed line is fatal, never skipped;
+  - `commitInfo` must be present, so a commit that cannot be version-checked is
+    refused rather than assumed to be format 1;
+  - a future `format` is refused rather than guessed at;
+  - versions must be gapless, so a deleted or missing commit fails startup;
+  - a key that lists but does not read is a hole, and fails rather than being
+    skipped.
+
+There is deliberately no per-commit checksum. It would have to live in a side
+object — a file cannot contain its own hash — which doubles the writes on the
+hot path to catch a case the object store already covers. Delta does not
+checksum its commits either.
+
+**Checkpoints get a content hash**, because they are the one place structural
+validation is genuinely insufficient. `size` (the line count) catches a *short*
+file, but a flipped byte inside a line leaves the count intact, and a corrupted
+row that still parses as JSON would be materialised as real state with nothing
+to notice. `_last_checkpoint.checksum` closes that.
+
+It is FNV-1a, not a cryptographic digest: it catches accidental corruption,
+which is the real threat, and it explicitly does **not** detect deliberate
+tampering by someone who can write to the bucket. Anyone reading this should
+not mistake it for an integrity guarantee against an adversary.
+
+Two properties make it work:
+
+  - `encode_checkpoint` is deterministic, so two replicas checkpointing the
+    same version produce identical bytes and therefore the same hash. The
+    determinism was built for idempotent writes; the checksum rides on it.
+  - The field is optional, so a pointer written by an older build still loads.
+    Treating a missing hash as a mismatch would reject every pre-existing
+    checkpoint on upgrade.
+
+A failed check **falls back to a full log scan rather than erroring**. The log
+is the source of truth and can always rebuild the state, so a bad checkpoint
+costs replay time. Failing hard would turn a recoverable situation into an
+unstartable server.
+
 ## Open question: read freshness
 
 Once there is more than one replica, replica B serves stale reads until it

@@ -355,7 +355,9 @@ impl Store {
 
         // Idempotent by construction: encode_checkpoint is deterministic, so two
         // replicas checkpointing the same version write identical bytes and the
-        // loser's AlreadyExists is not an error.
+        // loser's AlreadyExists is not an error. That determinism is also what
+        // makes the checksum below meaningful across replicas.
+        let body_for_hash = body.clone();
         self.log
             .put_if_absent(&action::checkpoint_key(version), body)
             .await?;
@@ -363,7 +365,11 @@ impl Store {
         // Pointer last, always. If this write fails the checkpoint is simply not
         // adopted; if it were written first, a crash between the two would leave
         // a pointer to an object that does not exist.
-        let ptr = serde_json::to_vec(&LastCheckpoint { version, size })
+        let ptr = serde_json::to_vec(&LastCheckpoint {
+            version,
+            size,
+            checksum: Some(log::content_hash(&body_for_hash)),
+        })
             .map_err(|e| UcError::new(ErrorCode::Internal, e.to_string()))?;
         self.log.put(action::LAST_CHECKPOINT_KEY, ptr).await
     }

@@ -55,9 +55,36 @@ pub const CHECKPOINT_INTERVAL: u64 = 100;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LastCheckpoint {
     pub version: u64,
-    /// Number of action lines in the checkpoint file. Lets replay detect a
-    /// truncated checkpoint instead of materialising a partial state.
+    /// Number of action lines in the checkpoint file. Catches truncation.
     pub size: u64,
+    /// Content hash of the checkpoint body.
+    ///
+    /// `size` alone only catches a *short* file; a flipped byte inside a line
+    /// leaves the line count intact, and a corrupted row that still parses as
+    /// JSON would be materialised as real state. This closes that gap.
+    ///
+    /// Optional so a pointer written by an older build still loads — it is
+    /// verified when present and skipped when absent, rather than treating a
+    /// missing hash as a mismatch and refusing every pre-existing checkpoint.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub checksum: Option<String>,
+}
+
+/// FNV-1a, 64-bit. Detects accidental corruption -- a flipped bit, a partial
+/// overwrite, a bad edit -- which is the actual threat here, since the object
+/// store already authenticates and integrity-checks transfers. It is NOT
+/// cryptographic: it does not detect deliberate tampering by someone who can
+/// write to the bucket, and nothing here should be read as claiming otherwise.
+///
+/// Chosen over a real digest to avoid a dependency on the boot-critical path
+/// for a check whose only job is catching corruption.
+pub fn content_hash(bytes: &[u8]) -> String {
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    for b in bytes {
+        h ^= *b as u64;
+        h = h.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    format!("{h:016x}")
 }
 
 /// Every key under `prefix` after `start_after`, paging until exhausted.
@@ -188,6 +215,22 @@ pub async fn resolve_checkpoint(
             "checkpoint is truncated; falling back to full log scan"
         );
         return Ok(None);
+    }
+    // Corruption guard. Falls back rather than failing: the log is the source
+    // of truth and can always rebuild the state, so a bad checkpoint costs
+    // replay time. Failing here would turn a recoverable situation into an
+    // unstartable server.
+    if let Some(ref expected) = parsed.checksum {
+        let actual = content_hash(&body);
+        if &actual != expected {
+            tracing::warn!(
+                version = parsed.version,
+                %expected,
+                %actual,
+                "checkpoint checksum mismatch; falling back to full log scan"
+            );
+            return Ok(None);
+        }
     }
     Ok(Some((parsed.version, body)))
 }

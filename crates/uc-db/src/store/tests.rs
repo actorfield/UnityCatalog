@@ -211,7 +211,7 @@ async fn a_dangling_checkpoint_pointer_falls_back_to_a_full_scan() {
     // Pointer to a checkpoint that was never written.
     log.put(
         action::LAST_CHECKPOINT_KEY,
-        serde_json::to_vec(&log::LastCheckpoint { version: 2, size: 2 }).unwrap(),
+        serde_json::to_vec(&log::LastCheckpoint { version: 2, size: 2, checksum: None }).unwrap(),
     )
     .await
     .unwrap();
@@ -222,6 +222,71 @@ async fn a_dangling_checkpoint_pointer_falls_back_to_a_full_scan() {
         2,
         "a missing checkpoint must cost replay time, never data"
     );
+}
+
+/// `size` only catches a short file. A flipped byte inside a line leaves the
+/// line count intact, and a corrupted row that still parses as JSON would be
+/// materialised as real state — so the checksum is what actually guards this.
+#[tokio::test]
+async fn a_corrupted_checkpoint_is_rejected_in_favour_of_the_log() {
+    let log = Arc::new(MemLog::default());
+    let store = Store::open(log.clone()).await.unwrap();
+    put_catalog(&store, "alpha").await.unwrap();
+    put_catalog(&store, "beta").await.unwrap();
+    store.write_checkpoint(2).await.unwrap();
+
+    // Flip a byte inside the checkpoint, keeping it valid JSON and the same
+    // length — so neither the parser nor the line count notices.
+    let key = action::checkpoint_key(2);
+    let body = log.get(&key).await.unwrap().unwrap();
+    let mut corrupted = String::from_utf8(body.clone()).unwrap();
+    assert!(corrupted.contains("alpha"));
+    corrupted = corrupted.replace("alpha", "alppa");
+    assert_eq!(corrupted.len(), body.len(), "same length, same line count");
+    log.remove(&key);
+    log.put(&key, corrupted.into_bytes()).await.unwrap();
+
+    let cold = Store::open(log).await.unwrap();
+    let snap = cold.snapshot().await;
+    assert_eq!(snap.version, 2);
+    assert!(
+        snap.get_by_natural_key(EntityKind::Catalog, "alpha").is_some(),
+        "must fall back to the log, not adopt the corrupted checkpoint"
+    );
+    assert!(snap.get_by_natural_key(EntityKind::Catalog, "alppa").is_none());
+}
+
+#[test]
+fn content_hash_changes_on_any_edit() {
+    let a = log::content_hash(b"{\"name\":\"alpha\"}");
+    assert_eq!(a, log::content_hash(b"{\"name\":\"alpha\"}"), "must be stable");
+    assert_ne!(a, log::content_hash(b"{\"name\":\"alppa\"}"));
+    assert_ne!(a, log::content_hash(b"{\"name\":\"alph\"}"));
+    assert_ne!(log::content_hash(b""), log::content_hash(b"\n"));
+}
+
+/// A pointer written before checksums existed carries none. It must still load
+/// rather than be treated as a mismatch and rejected on every startup.
+#[tokio::test]
+async fn a_checkpoint_pointer_without_a_checksum_still_loads() {
+    let log = Arc::new(MemLog::default());
+    let store = Store::open(log.clone()).await.unwrap();
+    put_catalog(&store, "alpha").await.unwrap();
+    store.write_checkpoint(1).await.unwrap();
+
+    log.put(
+        action::LAST_CHECKPOINT_KEY,
+        serde_json::to_vec(&serde_json::json!({"version": 1, "size": 1})).unwrap(),
+    )
+    .await
+    .unwrap();
+
+    let cold = Store::open(log).await.unwrap();
+    assert!(cold
+        .snapshot()
+        .await
+        .get_by_natural_key(EntityKind::Catalog, "alpha")
+        .is_some());
 }
 
 #[tokio::test]
@@ -235,7 +300,7 @@ async fn a_truncated_checkpoint_is_rejected_in_favour_of_the_log() {
     // Claim more lines than the object holds.
     log.put(
         action::LAST_CHECKPOINT_KEY,
-        serde_json::to_vec(&log::LastCheckpoint { version: 2, size: 99 }).unwrap(),
+        serde_json::to_vec(&log::LastCheckpoint { version: 2, size: 99, checksum: None }).unwrap(),
     )
     .await
     .unwrap();
