@@ -3,7 +3,7 @@ use axum::Router;
 use clap::Parser;
 use std::{
     net::SocketAddr,
-    path::{Path, PathBuf},
+    path::PathBuf,
     sync::Arc,
 };
 use tracing::info;
@@ -12,7 +12,6 @@ use uc_api::{catalog_api, control_api, delta_api, middleware::auth_middleware, s
 use uc_auth::{AllowingAuthorizer, JwkSet, JwtConfig, KeyManager, OidcConfig, UcAuthorizer};
 use uc_credentials::CloudCredentialVendor;
 use uc_db::{
-    pool::run_migrations,
     repos::{metastore, user},
     AnyPool,
 };
@@ -31,6 +30,13 @@ struct Args {
 
     #[arg(long, default_value = "sqlite:./etc/db/uc.db?mode=rwc")]
     database_url: String,
+
+    /// Object-store root for the log-structured metadata store, as
+    /// `s3://bucket/prefix`. Only used when built with `--features logstore`,
+    /// where it replaces --database-url entirely: there is no database, no
+    /// migrations, and no volume to lose.
+    #[arg(long, default_value = "")]
+    storage_root: String,
 
     /// Disable authorization (allow all requests). Use only in dev/testing.
     #[arg(long, default_value_t = false)]
@@ -142,36 +148,57 @@ async fn main() -> anyhow::Result<()> {
 
     info!("Starting Unity Catalog server on port {}", args.port);
     info!("Config dir: {}", args.config_dir.display());
+    #[cfg(not(feature = "logstore"))]
     info!("Database:   {}", mask_db_url(&args.database_url));
+    #[cfg(feature = "logstore")]
+    info!("Metadata:   {}", args.storage_root);
     info!(
         "Auth:       {}",
         if args.no_auth { "disabled" } else { "enabled" }
     );
 
-    // ── 1. RSA key initialization ─────────────────────────────────────────────
-    let key_manager =
-        KeyManager::load_or_generate(&args.config_dir).context("Failed to initialize RSA keys")?;
+    // ── 1-2. Store and key material ───────────────────────────────────────────
+    //
+    // These two are ordered differently per backend and so are opened together.
+    // On the log store the keypair lives *in* the store, so the store has to
+    // exist first; with SQLite the keys are files and come first.
+    #[cfg(not(feature = "logstore"))]
+    let (pool, key_manager, s3_info) = {
+        let key_manager = KeyManager::load_or_generate(&args.config_dir)
+            .context("Failed to initialize RSA keys")?;
+        let (actual_db_url, s3_info) = prepare_database_url(&args.config_dir, &args.database_url)
+            .await
+            .context("Failed to prepare database URL")?;
+        let pool = uc_db::pool::connect(&actual_db_url)
+            .await
+            .context("Failed to connect to database")?;
+        uc_db::pool::run_migrations(&pool)
+            .await
+            .context("Failed to run database migrations")?;
+        info!("Database migrations applied");
+        (pool, key_manager, s3_info)
+    };
+
+    #[cfg(feature = "logstore")]
+    let (pool, key_manager) = {
+        let pool = open_log_store(&args.storage_root)
+            .await
+            .context("Failed to open the metadata log")?;
+        info!("Log store replayed to version {}", pool.snapshot().await.version);
+        // Generated exactly once per org and shared by every replica; see
+        // Store::get_or_create_object for why the conditional create matters.
+        let key_manager = KeyManager::load_or_generate_in_store(&pool)
+            .await
+            .context("Failed to initialize RSA keys")?;
+        (pool, key_manager)
+    };
+
     let jwt_config = JwtConfig::from_der(
         &key_manager.private_key_der,
         &key_manager.public_key_der,
         key_manager.key_id.clone(),
     )
     .context("Failed to create JWT config")?;
-
-    // ── 2. Database pool + migrations ─────────────────────────────────────────
-    let (actual_db_url, s3_info) = prepare_database_url(&args.config_dir, &args.database_url)
-        .await
-        .context("Failed to prepare database URL")?;
-
-    let pool = uc_db::pool::connect(&actual_db_url)
-        .await
-        .context("Failed to connect to database")?;
-
-    run_migrations(&pool)
-        .await
-        .context("Failed to run database migrations")?;
-
-    info!("Database migrations applied");
 
     // ── 3. Metastore initialization ───────────────────────────────────────────
     let metastore = metastore::get_or_init(&pool, "unity-catalog")
@@ -232,6 +259,12 @@ async fn main() -> anyhow::Result<()> {
     let token_claims = uc_auth::jwt::UcClaims::new_access(admin_email);
     let token = uc_auth::jwt::encode_token(&jwt_config, &token_claims)
         .context("Failed to create admin token")?;
+    // The config dir is not guaranteed to exist. On the SQLite path it was
+    // created as a side effect of persisting the keypair; with the keys in the
+    // object store nothing creates it, and this write was the first thing to
+    // touch it -- so startup failed outright.
+    std::fs::create_dir_all(&args.config_dir)
+        .with_context(|| format!("Failed to create {}", args.config_dir.display()))?;
     std::fs::write(args.config_dir.join("token.txt"), &token)
         .context("Failed to write token.txt")?;
 
@@ -292,7 +325,13 @@ async fn main() -> anyhow::Result<()> {
         .await
         .context("Failed to bind to port")?;
 
+    // The receiver is only used by the SQLite shutdown sync below.
+    #[cfg_attr(feature = "logstore", allow(unused_variables))]
     let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
+    // Push the SQLite file back to S3 on clean shutdown. Not reachable on the
+    // log store: every commit is already durable in the object store when it
+    // is acknowledged, so there is nothing to flush at exit.
+    #[cfg(not(feature = "logstore"))]
     if let Some(ref s3_info) = s3_info {
         let s3_client = build_s3_client().ok();
         let bucket = s3_info.bucket.clone();
@@ -321,8 +360,47 @@ async fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
+// ── Log-structured store ────────────────────────────────────────────────────────
+
+/// Open the metadata log at `s3://bucket/prefix`.
+///
+/// `AWS_ENDPOINT_URL` redirects to MinIO, and forces path-style addressing:
+/// virtual-host style would resolve `bucket.minio.svc` as a hostname, which
+/// does not exist in-cluster.
+#[cfg(feature = "logstore")]
+async fn open_log_store(storage_root: &str) -> anyhow::Result<uc_db::AnyPool> {
+    use std::sync::Arc;
+
+    let rest = storage_root.strip_prefix("s3://").ok_or_else(|| {
+        anyhow::anyhow!("--storage-root must be s3://bucket[/prefix], got {storage_root:?}")
+    })?;
+    let (bucket, prefix) = match rest.split_once('/') {
+        Some((b, p)) => (b, p),
+        None => (rest, ""),
+    };
+    if bucket.is_empty() {
+        anyhow::bail!("--storage-root has no bucket: {storage_root:?}");
+    }
+
+    let sdk = aws_config::load_defaults(aws_config::BehaviorVersion::latest()).await;
+    let mut builder = aws_sdk_s3::config::Builder::from(&sdk);
+    if let Ok(endpoint) = std::env::var("AWS_ENDPOINT_URL") {
+        if !endpoint.is_empty() {
+            builder = builder.endpoint_url(endpoint).force_path_style(true);
+        }
+    }
+    let client = aws_sdk_s3::Client::from_conf(builder.build());
+
+    info!("Metadata log: s3://{bucket}/{prefix}");
+    let log = Arc::new(uc_db::store::s3::S3Log::new(client, bucket, prefix));
+    uc_db::store::Store::open(log)
+        .await
+        .map_err(|e| anyhow::anyhow!("{e}"))
+}
+
 // ── S3-backed SQLite support ────────────────────────────────────────────────────
 
+#[cfg(not(feature = "logstore"))]
 #[allow(dead_code)]
 struct S3Info {
     bucket: String,
@@ -330,8 +408,9 @@ struct S3Info {
     pub local_path: PathBuf,
 }
 
+#[cfg(not(feature = "logstore"))]
 async fn prepare_database_url(
-    config_dir: &Path,
+    config_dir: &std::path::Path,
     url: &str,
 ) -> anyhow::Result<(String, Option<S3Info>)> {
     let Some(stripped) = url.strip_prefix("s3://") else {
@@ -363,6 +442,7 @@ async fn prepare_database_url(
     ))
 }
 
+#[cfg(not(feature = "logstore"))]
 fn build_s3_client() -> anyhow::Result<reqwest::Client> {
     let endpoint = std::env::var("AWS_ENDPOINT_URL").unwrap_or_default();
     let key_id = std::env::var("AWS_ACCESS_KEY_ID").unwrap_or_default();
@@ -382,6 +462,7 @@ fn build_s3_client() -> anyhow::Result<reqwest::Client> {
     Ok(builder.build()?)
 }
 
+#[cfg(not(feature = "logstore"))]
 async fn download_from_s3(
     client: &reqwest::Client,
     bucket: &str,
@@ -405,6 +486,7 @@ async fn download_from_s3(
     Ok(())
 }
 
+#[cfg(not(feature = "logstore"))]
 fn sanitize_filename(key: &str) -> String {
     key.replace('/', "_")
 }
@@ -412,6 +494,7 @@ fn sanitize_filename(key: &str) -> String {
 /// Redact the `user:password@` credentials from a database URL before logging.
 /// SQLite URLs have no credentials and pass through unchanged; Postgres/S3
 /// URLs of the form `scheme://user:pass@host/...` have the password masked.
+#[cfg(not(feature = "logstore"))]
 fn mask_db_url(url: &str) -> String {
     let Some((scheme, rest)) = url.split_once("://") else {
         return url.to_string();
@@ -434,6 +517,7 @@ fn mask_db_url(url: &str) -> String {
     }
 }
 
+#[cfg(not(feature = "logstore"))]
 fn base64_encode(input: &str) -> String {
     let mut buf = Vec::new();
     for chunk in input.as_bytes().chunks(3) {
@@ -454,6 +538,7 @@ fn base64_encode(input: &str) -> String {
     String::from_utf8(buf).unwrap()
 }
 
+#[cfg(not(feature = "logstore"))]
 const ENC_TABLE: [u8; 64] = *b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 
 // ── OIDC JWKS discovery ───────────────────────────────────────────────────────

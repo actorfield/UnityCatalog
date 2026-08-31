@@ -12,6 +12,9 @@ path = "src/main.rs"
 default = ["sqlite"]
 sqlite = ["uc-api/sqlite", "uc-db/sqlite", "uc-auth/sqlite"]
 postgres = ["uc-api/postgres", "uc-db/postgres", "uc-auth/postgres"]
+# The log-structured store. Pulls in uc-db/s3 because a real deployment needs a
+# real ObjectLog -- MemoryLog would lose every commit on restart.
+logstore = ["uc-api/logstore", "uc-db/logstore", "uc-db/s3", "uc-auth/logstore", "dep:aws-sdk-s3", "dep:aws-config"]
 
 [dependencies]
 uc-errors = { path = "../uc-errors" }
@@ -20,6 +23,8 @@ uc-openapi = { path = "../uc-openapi" }
 uc-db = { path = "../uc-db" }
 uc-auth = { path = "../uc-auth" }
 uc-credentials = { path = "../uc-credentials" }
+aws-sdk-s3 = { workspace = true, optional = true }
+aws-config = { workspace = true, optional = true }
 uc-api = { path = "../uc-api" }
 axum = { workspace = true }
 tokio = { workspace = true }

@@ -381,7 +381,8 @@ worth choosing now — but worth not pretending multi-replica arrives for free.
   4. port the 19 direct sqlx sites in uc-api                               DONE
   5. casbin policy off the pool                                            DONE
   6. keys to _keys.json                                                    DONE
-  7. drop PVC from k8s_effects.rs, pass --storage-root instead of --database-url  <- next
+  7a. uc-server: --storage-root, S3Log, keys from the store                DONE
+  7b. drop the PVC from k8s_effects.rs (aispecs)                           <- next
   8. rename AnyPool -> Store
 
 ### uc-api no longer speaks SQL
@@ -466,6 +467,38 @@ ever written on the *generate* path, so a server that loaded existing keys, or
 whose file was lost, served 500s from `/jwks` permanently — a real bug
 independent of this port. The document is now derived from the keypair at
 startup and held in `AppState`.
+
+### Verified against a real object store
+
+Everything up to here ran against `MemoryLog`. `S3Log` (feature `s3`, built on
+aws-sdk-s3) is the real implementation, and `uc-server --features logstore`
+takes `--storage-root s3://bucket/prefix` in place of `--database-url`: no
+database, no migrations, no volume.
+
+Run end-to-end against MinIO `RELEASE.2025-04-08`, the same build the cluster
+uses:
+
+  - catalog / schema / table create, list and get all work; commits land as
+    `acme/_uc_log/0000…0002.json`, readable JSONL with `commitInfo` first;
+  - a duplicate catalog returns `CATALOG_ALREADY_EXISTS`, not a 500;
+  - restarting a fresh process replays to version 5 and returns the same
+    metastore id, so `get_or_init` adopts the existing row rather than making a
+    second one;
+  - **two independent server processes racing the same catalog name against one
+    log produced exactly one winner** — a 200 and a 400, one commit. This is the
+    claim the whole design rests on, and it had only been tested against an
+    in-process fake until now;
+  - `_keys.json` was written once on first boot and never regenerated across
+    three processes.
+
+Two bugs surfaced only by running it, both invisible to the test suite:
+
+  - **Startup failed outright** writing `token.txt`. The config dir is not
+    guaranteed to exist; on the SQLite path it was created as a side effect of
+    persisting the keypair, and with the keys in the object store nothing
+    created it. Now explicit.
+  - The startup banner logged `Database: sqlite:./etc/db/uc.db` on the log-store
+    path, naming a database that is never opened.
 
 ### How the port is checked
 
