@@ -68,9 +68,13 @@ struct Args {
     generate_key_file: Option<PathBuf>,
 
     /// Object-store root for the log-structured metadata store, as
-    /// `s3://bucket/prefix`. Only used when built with `--features logstore`,
-    /// where it replaces --database-url entirely: there is no database, no
-    /// migrations, and no volume to lose.
+    /// `s3://bucket/prefix`. Replaces --database-url entirely: no database, no
+    /// migrations, no volume to lose.
+    ///
+    /// Feature-gated rather than accepted-and-ignored on the SQL builds, so
+    /// passing it to a binary that cannot honour it fails loudly instead of
+    /// starting quietly against a database.
+    #[cfg(feature = "logstore")]
     #[arg(long, default_value = "")]
     storage_root: String,
 

@@ -29,7 +29,7 @@ unitycatalog-rs/
 | Concern | Crate |
 |---|---|
 | HTTP server | `axum 0.7` + `tower-http` |
-| Database | `sqlx 0.7` (SQLite default, Postgres via feature flag) |
+| Storage | `sqlx 0.7` (SQLite default, Postgres via feature flag) or a log-structured object store (`logstore`) |
 | Auth | `jsonwebtoken 9` (RS512 JWT) + `casbin` (RBAC) |
 | Serialization | `serde` + `serde_json` |
 | Cloud credentials | `aws-sdk-sts` (always compiled in; vending toggled at runtime via `--enable-aws-credentials`, default on) |
@@ -48,6 +48,12 @@ For Postgres instead of SQLite:
 cargo build --no-default-features --features postgres
 ```
 
+For the log-structured object store, with no database at all:
+
+```bash
+cargo build --no-default-features --features logstore
+```
+
 ### 2. Run the server
 
 ```bash
@@ -59,6 +65,28 @@ cargo build --no-default-features --features postgres
 ```
 
 RSA keys are generated automatically on first start under `--config-dir`.
+
+With `--features logstore` there is no database, no migrations and no local
+state — metadata lives in an object store and every replica replays it at
+startup:
+
+```bash
+./target/debug/uc-server --generate-key-file ./etc/conf/keys.json   # once
+
+AWS_ENDPOINT_URL=http://localhost:9000 \
+./target/debug/uc-server \
+  --port 8080 \
+  --storage-root s3://my-bucket/my-org \
+  --key-file ./etc/conf/keys.json \
+  --no-auth
+```
+
+Key material is never written to the object store, and there is no option to do
+so. Credentials vended by this server are bucket-scoped, so a private key in
+that bucket would be readable by anything holding one. Supply it from a secret
+store — `--key-file` is the path a mounted Kubernetes Secret arrives at. A
+missing key file is a startup error, never a cue to generate: silently minting a
+new keypair invalidates every token already issued.
 
 ### 3. Seed sample data
 
@@ -121,31 +149,71 @@ Iceberg REST catalog (`/api/2.1/unity-catalog/iceberg/*`).
 
 RBAC uses [Casbin](https://casbin.org/) with a hierarchical model: Metastore → Catalog → Schema → Table/Volume/Function/Model.
 
-## Database
+## Storage backends
 
-SQLite is the default (zero setup). Switch to Postgres at compile time:
+Chosen at compile time. The repo layer has one implementation per backend behind
+identical signatures, and the same integration suite runs against each.
 
-```bash
-cargo build --no-default-features --features postgres
-```
+| Feature | Metadata lives in | Notes |
+|---|---|---|
+| `sqlite` (default) | a local SQLite file | Zero setup. Migrations run on startup from `migrations/sqlite/`. |
+| `postgres` | PostgreSQL | Migrations from `migrations/postgres/`. |
+| `logstore` | an S3-compatible object store | No database, no migrations, no local state. |
 
-Migrations run automatically on startup from `migrations/sqlite/` or `migrations/postgres/`.
+`logstore` keeps metadata as an append-only JSONL commit log with periodic
+checkpoints, laid out like Delta's `_delta_log`, and materialises it in memory
+at startup. Concurrency rests on conditional writes (`If-None-Match: *`), so it
+needs S3 (August 2024 or later) or MinIO. Delta commits are partitioned into a
+log per table, matching Delta's own layout.
+
+Multiple replicas may share one log. Writes are safe — a stale replica loses the
+conditional write, replays and retries — but reads are only eventually
+consistent, bounded by `--refresh-interval-secs`.
+
+See [docs/log-structured-metadata.md](docs/log-structured-metadata.md) for the
+design and its limits.
 
 ## CLI Options
 
 ```
---port          Port to listen on (default: 8080)
---config-dir    Path to config directory — RSA keys, JWKS, token (default: ./etc/conf)
---database-url  SQLite or Postgres connection string
---no-auth       Disable JWT/RBAC enforcement
+--port                    Port to listen on (default: 8080)
+--config-dir              Config directory — RSA keys (sqlite/postgres only) and
+                          the dev admin token (default: ./etc/conf)
+--database-url            SQLite or Postgres connection string
+--no-auth                 Disable JWT/RBAC enforcement
+```
+
+Key material, on every build:
+
+```
+--key-file PATH           Load JWT signing key material from PATH, the path a
+                          mounted secret arrives at. Required under `logstore`;
+                          optional elsewhere, where keys otherwise generate into
+                          --config-dir. A missing file is an error, never a cue
+                          to generate.
+--generate-key-file PATH  Write fresh key material to PATH and exit. Refuses to
+                          overwrite an existing file.
+```
+
+Only with `--features logstore`:
+
+```
+--storage-root            Object-store root, as s3://bucket/prefix
+--refresh-interval-secs   Refresh the in-memory snapshot from the log every N
+                          seconds (default 0, off). Only useful with more than
+                          one replica on the same log.
 ```
 
 ## Development
 
 ```bash
-cargo check          # fast type check
-cargo test --lib     # unit tests across the workspace (JWT, serde, error mapping, ...)
-cargo build          # full build
+cargo check                                  # fast type check
+cargo test --lib                             # unit tests across the workspace
+cargo build                                  # full build
+
+# The repo suite runs against both backends and must pass on each.
+cargo test -p uc-db --test test_repos
+cargo test -p uc-db --test test_repos --features logstore
 ```
 
 ## License
