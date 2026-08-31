@@ -362,176 +362,31 @@ is the source of truth and can always rebuild the state, so a bad checkpoint
 costs replay time. Failing hard would turn a recoverable situation into an
 unstartable server.
 
-## Open question: read freshness
+## Read freshness across replicas
 
-Once there is more than one replica, replica B serves stale reads until it
-replays. The PVC makes that impossible today, so it is a new problem the log
-introduces.
+Resolved as far as it can be, with the limits stated rather than glossed.
 
-v1 should stay single-replica and treat multi-replica as explicitly not yet
-supported. The options when it matters: replay-before-read on mutating paths
-only, short-poll the log tail, or accept bounded staleness on list/get. Not
-worth choosing now — but worth not pretending multi-replica arrives for free.
+**Writes converge on their own.** A stale replica cannot commit: its conditional
+PUT loses, it replays, and its precondition is re-evaluated against what it just
+learned. So multi-replica *writes* are safe with no coordination beyond the
+object store — demonstrated with two live server processes racing one catalog
+name and producing exactly one winner.
 
-## Sequencing
+**Reads do not.** A replica that only serves reads never learns about another's
+commits, and would serve stale metadata indefinitely. That is a real gap the PVC
+did not have, because the PVC allowed only one writer in the first place.
 
-  1. `store/` module: actions, log, replay, checkpoint, in-memory indices  DONE
-  2. port repos/catalog.rs as the worked example                           DONE
-  3. port the remaining 12 repo modules                                    DONE
-  4. port the 19 direct sqlx sites in uc-api                               DONE
-  5. casbin policy off the pool                                            DONE
-  6. keys to _keys.json                                                    DONE
-  7a. uc-server: --storage-root, S3Log, keys from the store                DONE
-  7b. drop the PVC from k8s_effects.rs (aispecs)                           <- next
-  8. rename AnyPool -> Store
+`--refresh-interval-secs` bounds it: a background task calls `Store::catch_up`
+on a timer, at the cost of one LIST per interval. Default 0, off, because a
+single replica does not need it.
 
-### uc-api no longer speaks SQL
+What this does **not** do is make reads linearizable. A request can still land
+in the window between another replica's commit and the next refresh. It converts
+unbounded staleness into bounded staleness, which is a weaker and different
+claim, and the right one to make in the docs rather than in a footnote.
 
-Step 4 removed the last `sqlx::query` from uc-api and with it the crate's `sqlx`
-dependency. That dependency is the enforcement: handlers now physically cannot
-reach past the repo layer, so nothing can quietly reintroduce a raw statement
-that only works on one backend.
-
-Nineteen inline statements became repo functions implemented on both backends —
-`property::set` / `delete_key`, `table::patch` / `rename`, `delta::mark_backfilled`,
-`credential::update`, `external_location::update`, and five on `model`.
-
-### One commit object is mutable, deliberately
-
-`delta::mark_backfilled` edits a commit object that conditional PUT otherwise
-makes write-once. `DeltaLog::mutate_commit` is the only overwrite path, and it
-is narrow on purpose:
-
-  - The OCC guarantee concerns *who first claimed version N*, which is settled
-    once the object exists. Editing the body afterwards cannot create a second
-    claimant, so concurrency control is untouched.
-  - It rejects any edit that changes `table_id` or `commit_version` — those are
-    the object key, and letting them drift would make the log lie about itself.
-  - There is no read-modify-write protection, so the only safe use is an
-    idempotent, monotonic change where last-write-wins converges. Setting a
-    latched flag qualifies; incrementing a counter would not. That constraint
-    is documented at the function, not assumed.
-
-### Casbin
-
-The adapter spoke sqlx directly. Its whole surface reduces to five primitives —
-load_all, insert, delete, delete_many, replace_all, clear — which now live in
-`repos::casbin` with a body per backend. `uc-auth` no longer depends on sqlx
-either, and its `sqlite`/`postgres` features forward to uc-db rather than to a
-driver, since the crate has no reason to know one exists.
-
-`CasbinRule` deliberately carries no id. SQLite uses an INTEGER AUTOINCREMENT
-surrogate and the log store a UUID; neither means anything to casbin, whose
-identity for a rule is the (ptype, v0..v5) tuple — which is also the UNIQUE
-INDEX, and so the natural key.
-
-Two things worth noting:
-
-**`ORDER BY id` survives only because ids are UUIDv7.** The SQL orders by the
-autoincrement surrogate, i.e. insertion order. `Snapshot::iter_by_id` reproduces
-that by sorting on the UUID, which is creation-ordered under v7 and would be
-arbitrary under v4. The v7 change was made for other reasons; this depends on it.
-
-**`save_policy` gets strictly safer.** The SQL wraps delete-then-insert in a
-transaction with a comment about "minimising the window where the table is
-empty" — an authorizer reading mid-replace sees no policy and denies everything.
-As a single commit that window does not exist rather than merely being short.
-
-The adapter's own restart-survival tests now run on both backends, which is the
-strongest check available for this piece: they assert that a policy written by
-one authorizer is visible to a second one constructed over the same store.
-
-### Key material comes from a secret store, never the object store
-
-The JWT signing keypair is supplied by `--key-file`, the path a mounted
-Kubernetes Secret arrives at. There is **no** object-store path and no flag to
-enable one.
-
-The reason is specific rather than general caution. `uc-credentials`' vend
-calls `assume_role()` with no `.policy()`, so a vended credential carries the
-role's full permissions, and that role is scoped to a bucket rather than a
-prefix. A private key anywhere in that bucket would therefore be readable by
-anything holding a vended credential for it — which is every client that can
-ask for table credentials — and reading the signing key means forging tokens for
-any principal.
-
-An earlier revision of this work did store the key at
-`<storage-root>/_uc_log/_keys.json`, guarded by an opt-in flag. That was the
-wrong shape: the exposure is silent, so a deployment that reused the data bucket
-for `--storage-root` would look completely healthy. It is gone, along with the
-`get_or_create_object` primitive that existed only to serve it.
-
-Consequences, all deliberate:
-
-  - **A file, not an environment variable.** Env vars are inherited by child
-    processes, appear in crash dumps and process listings, and are easy to log
-    by accident. Secrets mount as files.
-  - **A missing key file is a startup error**, never a cue to generate. Silently
-    minting a keypair invalidates every issued token while looking like a clean
-    start — the exact failure the PVC removal originally introduced.
-  - **No config-dir fallback under `logstore`.** Generating on a stateless
-    replica would mint a different keypair per pod.
-  - `--generate-key-file <path>` is the only way to produce one: a one-shot mode
-    that writes and exits, and refuses to overwrite an existing file. A separate
-    mode rather than a fallback, for the reason above.
-
-The SQLite path keeps generating into the config dir when no `--key-file` is
-given, since that is local dev on a machine with no secret store.
-
-### The /jwks endpoint no longer reads a file
-
-It read `certs.json` from the config dir on every request. That file was only
-ever written on the *generate* path, so a server that loaded existing keys, or
-whose file was lost, served 500s from `/jwks` permanently — a real bug
-independent of this port. The document is now derived from the keypair at
-startup and held in `AppState`.
-
-### Verified against a real object store
-
-Everything up to here ran against `MemoryLog`. `S3Log` (feature `s3`, built on
-aws-sdk-s3) is the real implementation, and `uc-server --features logstore`
-takes `--storage-root s3://bucket/prefix` in place of `--database-url`: no
-database, no migrations, no volume.
-
-Run end-to-end against MinIO `RELEASE.2025-04-08`, the same build the cluster
-uses:
-
-  - catalog / schema / table create, list and get all work; commits land as
-    `acme/_uc_log/0000…0002.json`, readable JSONL with `commitInfo` first;
-  - a duplicate catalog returns `CATALOG_ALREADY_EXISTS`, not a 500;
-  - restarting a fresh process replays to version 5 and returns the same
-    metastore id, so `get_or_init` adopts the existing row rather than making a
-    second one;
-  - **two independent server processes racing the same catalog name against one
-    log produced exactly one winner** — a 200 and a 400, one commit. This is the
-    claim the whole design rests on, and it had only been tested against an
-    in-process fake until now;
-  - `_keys.json` was written once on first boot and never regenerated across
-    three processes.
-
-Two bugs surfaced only by running it, both invisible to the test suite:
-
-  - **Startup failed outright** writing `token.txt`. The config dir is not
-    guaranteed to exist; on the SQLite path it was created as a side effect of
-    persisting the keypair, and with the keys in the object store nothing
-    created it. Now explicit.
-  - The startup banner logged `Database: sqlite:./etc/db/uc.db` on the log-store
-    path, naming a database that is never opened.
-
-### How the port is checked
-
-`tests/test_repos.rs` was written against SQLite and now runs unmodified against
-both backends — `cargo test -p uc-db --test test_repos`, with and without
-`--features logstore`. The port's whole claim is that repo semantics are
-identical, so the same suite passing on both is the evidence for it. Any
-divergence introduced later fails there rather than in production.
-
-`store::memory::MemoryLog` is public for this reason: it is the reference
-implementation of the `ObjectLog` contract, and it lets callers outside the
-crate exercise the store without an object store.
-
-Steps 1-6 keep the SQLite build working behind a feature flag, so the cutover in
-7 is the only irreversible step.
+`catch_up` holds the write lock across its listing, so readers block for its
+duration. Fine for a metadata log; not a pattern to copy onto a hot path.
 
 ## Prerequisite found while sketching
 

@@ -286,7 +286,13 @@ impl StoreInner {
     }
 
     /// Pull in every commit written since our current version.
-    async fn catch_up(&self) -> Result<(), UcError> {
+    ///
+    /// Public so a replica can refresh on a timer: with more than one uc-server
+    /// on the same log, a reader is otherwise stale until its own next write.
+    /// Note this holds the write lock across the listing, so readers block for
+    /// the duration — fine for a metadata log, not a pattern to copy for a hot
+    /// path.
+    pub async fn catch_up(&self) -> Result<(), UcError> {
         let mut state = self.state.write().await;
         if state.version == 0 {
             if let Some((version, body)) = log::resolve_checkpoint(&*self.log).await? {

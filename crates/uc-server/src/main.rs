@@ -41,6 +41,23 @@ struct Args {
     #[arg(long)]
     key_file: Option<PathBuf>,
 
+    /// Seconds between background refreshes of the in-memory snapshot from the
+    /// log. 0 disables it.
+    ///
+    /// Only matters with more than one uc-server on the same log. A replica
+    /// learns about another's commits when it next writes (the conditional PUT
+    /// forces a replay on conflict), but a read-only replica would otherwise
+    /// serve stale metadata indefinitely. This bounds that staleness at the
+    /// cost of one LIST per interval.
+    ///
+    /// It does not make reads linearizable — a request can still land in the
+    /// window between another replica's commit and the next refresh. It turns
+    /// unbounded staleness into bounded staleness, which is a different and
+    /// weaker claim.
+    #[cfg(feature = "logstore")]
+    #[arg(long, default_value_t = 0)]
+    refresh_interval_secs: u64,
+
     /// Generate fresh JWT signing key material at this path, then exit.
     ///
     /// The one supported way to produce a `--key-file`, for loading into a
@@ -344,6 +361,26 @@ async fn main() -> anyhow::Result<()> {
     } else {
         None
     };
+
+    // ── 8b. Snapshot refresh ──────────────────────────────────────────────────
+    #[cfg(feature = "logstore")]
+    if args.refresh_interval_secs > 0 {
+        let refresher = pool.clone();
+        let period = std::time::Duration::from_secs(args.refresh_interval_secs);
+        info!("Refreshing snapshot every {}s", args.refresh_interval_secs);
+        tokio::spawn(async move {
+            let mut ticker = tokio::time::interval(period);
+            ticker.tick().await; // the first tick fires immediately
+            loop {
+                ticker.tick().await;
+                // A failed refresh is not fatal: the snapshot simply stays
+                // where it was, and a write will force a replay anyway.
+                if let Err(e) = refresher.catch_up().await {
+                    tracing::warn!(error = %e, "snapshot refresh failed");
+                }
+            }
+        });
+    }
 
     // ── 8. App state ──────────────────────────────────────────────────────────
     let state = AppState::new(

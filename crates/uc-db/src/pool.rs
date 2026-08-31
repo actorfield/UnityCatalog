@@ -1,6 +1,9 @@
-/// The log-structured store, when `logstore` is on. Named `AnyPool` so the ~262
-/// call sites in uc-api that pass `&state.pool` into repo functions do not move;
-/// renaming to `Store` is a separate mechanical commit once the port lands.
+/// The log-structured store, when `logstore` is on.
+///
+/// The name stays `AnyPool`: it is whichever backend handle this build selected,
+/// and both remain supported. Renaming it to `Store` was planned back when the
+/// log store was going to replace SQL outright — it would now be a lie on the
+/// SQLite path, where this is a connection pool and nothing store-shaped.
 #[cfg(feature = "logstore")]
 pub type AnyPool = crate::store::Store;
 

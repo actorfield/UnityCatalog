@@ -824,3 +824,71 @@ mod ported {
 
 }
 
+
+// ── multi-replica read freshness ────────────────────────────────────────────
+
+/// Writes converge without help: the conditional PUT forces a stale writer to
+/// replay before it can commit. This is what makes multi-replica *writes* safe
+/// even with no refresh at all.
+#[tokio::test]
+async fn a_stale_replica_catches_up_when_it_writes() {
+    let log = Arc::new(MemLog::default());
+    let a = Store::open(log.clone()).await.unwrap();
+    let b = Store::open(log).await.unwrap();
+
+    put_catalog(&a, "written-by-a").await.unwrap();
+    assert_eq!(b.snapshot().await.version, 0, "b has not seen it yet");
+
+    put_catalog(&b, "written-by-b").await.unwrap();
+    let snap = b.snapshot().await;
+    assert_eq!(snap.version, 2);
+    assert!(
+        snap.get_by_natural_key(EntityKind::Catalog, "written-by-a").is_some(),
+        "committing must have pulled in a's work"
+    );
+}
+
+/// Reads do not converge on their own — this is the gap `catch_up` exists to
+/// bound, and the reason multi-replica reads are only eventually consistent.
+#[tokio::test]
+async fn a_read_only_replica_is_stale_until_it_refreshes() {
+    let log = Arc::new(MemLog::default());
+    let writer = Store::open(log.clone()).await.unwrap();
+    let reader = Store::open(log).await.unwrap();
+
+    put_catalog(&writer, "fresh").await.unwrap();
+
+    assert!(
+        reader
+            .snapshot()
+            .await
+            .get_by_natural_key(EntityKind::Catalog, "fresh")
+            .is_none(),
+        "a reader that never writes and never refreshes stays stale"
+    );
+
+    reader.catch_up().await.unwrap();
+
+    assert!(
+        reader
+            .snapshot()
+            .await
+            .get_by_natural_key(EntityKind::Catalog, "fresh")
+            .is_some(),
+        "refreshing must pick up another replica's commits"
+    );
+}
+
+#[tokio::test]
+async fn refreshing_repeatedly_is_harmless() {
+    let log = Arc::new(MemLog::default());
+    let store = Store::open(log).await.unwrap();
+    put_catalog(&store, "one").await.unwrap();
+
+    for _ in 0..5 {
+        store.catch_up().await.unwrap();
+    }
+    let snap = store.snapshot().await;
+    assert_eq!(snap.version, 1, "a no-op refresh must not advance the version");
+    assert_eq!(snap.scan(EntityKind::Catalog, None, 10).len(), 1);
+}
