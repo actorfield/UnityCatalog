@@ -8,6 +8,8 @@ pub mod action;
 pub mod delta_log;
 pub mod log;
 pub mod memory;
+#[cfg(feature = "s3")]
+pub mod s3;
 
 #[cfg(test)]
 mod tests;

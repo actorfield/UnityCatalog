@@ -12,6 +12,9 @@ postgres = ["sqlx/postgres"]
 # `*_store.rs` repo bodies over the SQL ones. Off by default: the SQL path stays
 # the shipping path until the port is complete.
 logstore = []
+# The real ObjectLog. Separate from `logstore` so the store and its tests build
+# without pulling in the AWS SDK.
+s3 = ["dep:aws-sdk-s3", "dep:aws-config"]
 
 [dependencies]
 uc-errors = { path = "../uc-errors" }
@@ -20,6 +23,8 @@ uc-openapi = { path = "../uc-openapi" }
 sqlx = { workspace = true }
 tokio = { workspace = true }
 async-trait = { workspace = true }
+aws-sdk-s3 = { workspace = true, optional = true }
+aws-config = { workspace = true, optional = true }
 uuid = { workspace = true }
 chrono = { workspace = true }
 serde = { workspace = true }
