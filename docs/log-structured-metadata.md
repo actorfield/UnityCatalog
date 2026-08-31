@@ -380,8 +380,8 @@ worth choosing now — but worth not pretending multi-replica arrives for free.
   3. port the remaining 12 repo modules                                    DONE
   4. port the 19 direct sqlx sites in uc-api                               DONE
   5. casbin policy off the pool                                            DONE
-  6. keys to _keys.json                                                    <- next
-  7. drop PVC from k8s_effects.rs, pass --storage-root instead of --database-url
+  6. keys to _keys.json                                                    DONE
+  7. drop PVC from k8s_effects.rs, pass --storage-root instead of --database-url  <- next
   8. rename AnyPool -> Store
 
 ### uc-api no longer speaks SQL
@@ -439,6 +439,33 @@ As a single commit that window does not exist rather than merely being short.
 The adapter's own restart-survival tests now run on both backends, which is the
 strongest check available for this piece: they assert that a policy written by
 one authorizer is visible to a second one constructed over the same store.
+
+### Key material
+
+`Store::get_or_create_object` creates a singleton exactly once across replicas:
+GET, else generate and conditionally PUT, and on losing the race re-read and
+adopt the winner's value. It refuses rather than falling back to its own copy if
+the object vanishes between the two, because proceeding with a key the winner
+does not have is the precise failure it exists to prevent.
+
+Key material cannot live in the log itself — it has to be readable independently
+of replay, and every replica must agree on one value — so `_uc_log/_keys.json`
+is a plain object, hex-encoded JSON so it is inspectable. **Whatever holds that
+object is as sensitive as the keypair**, which is a change in where the secret
+lives: from a per-org PVC to the org's bucket prefix.
+
+Without the conditional create, two replicas booting together would each
+generate a keypair and each persist it, and tokens signed by one would be
+rejected by the other depending on which pod served the request — intermittently,
+with nothing wrong at startup.
+
+### The /jwks endpoint no longer reads a file
+
+It read `certs.json` from the config dir on every request. That file was only
+ever written on the *generate* path, so a server that loaded existing keys, or
+whose file was lost, served 500s from `/jwks` permanently — a real bug
+independent of this port. The document is now derived from the keypair at
+startup and held in `AppState`.
 
 ### How the port is checked
 

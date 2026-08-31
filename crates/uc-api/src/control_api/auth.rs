@@ -65,11 +65,9 @@ pub async fn logout(State(_state): State<AppState>) -> StatusCode {
 }
 
 pub async fn jwks(State(state): State<AppState>) -> Result<String, UcError> {
-    let path = state.config_dir.join("certs.json");
-    tokio::fs::read_to_string(&path).await.map_err(|e| {
-        UcError::new(
-            ErrorCode::Internal,
-            format!("JWKS not found at {}: {}", path.display(), e),
-        )
-    })
+    // Derived from the keypair at startup. Previously read from certs.json on
+    // every request, which failed permanently whenever that file was absent --
+    // and it was only ever written on the key-generation path, never when
+    // existing keys were loaded.
+    Ok(state.jwks.as_ref().clone())
 }

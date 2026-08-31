@@ -259,6 +259,7 @@ async fn main() -> anyhow::Result<()> {
         authorizer,
         build_credential_vendor(args.enable_aws_credentials),
         jwt_config,
+        uc_auth::keys::jwks(&key_manager),
         metastore_id,
         !args.no_auth,
         args.config_dir.clone(),

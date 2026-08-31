@@ -48,6 +48,64 @@ impl KeyManager {
         })
     }
 
+    /// Serialise for storage as one object.
+    ///
+    /// Hex rather than raw DER so the object is inspectable and diffable, and
+    /// so it survives anything that assumes text. The private key is in here:
+    /// whatever holds this object is as sensitive as the keypair itself.
+    pub fn encode(&self) -> Result<Vec<u8>, UcError> {
+        let doc = serde_json::json!({
+            "key_id": self.key_id,
+            "private_key_der": hex::encode(&self.private_key_der),
+            "public_key_der": hex::encode(&self.public_key_der),
+        });
+        serde_json::to_vec_pretty(&doc)
+            .map_err(|e| UcError::new(ErrorCode::Internal, e.to_string()))
+    }
+
+    pub fn decode(bytes: &[u8]) -> Result<Self, UcError> {
+        let bad = |what: &str| {
+            UcError::new(ErrorCode::Internal, format!("key material: {what}"))
+        };
+        let doc: serde_json::Value =
+            serde_json::from_slice(bytes).map_err(|e| bad(&format!("unparseable: {e}")))?;
+        let field = |name: &str| -> Result<String, UcError> {
+            doc.get(name)
+                .and_then(|v| v.as_str())
+                .map(str::to_owned)
+                .ok_or_else(|| bad(&format!("missing {name}")))
+        };
+        let unhex = |name: &str, v: &str| -> Result<Vec<u8>, UcError> {
+            hex::decode(v).map_err(|e| bad(&format!("{name} is not hex: {e}")))
+        };
+        let private_hex = field("private_key_der")?;
+        let public_hex = field("public_key_der")?;
+        Ok(Self {
+            key_id: field("key_id")?,
+            private_key_der: unhex("private_key_der", &private_hex)?,
+            public_key_der: unhex("public_key_der", &public_hex)?,
+        })
+    }
+
+    /// Load the org's keypair from the log store, generating it exactly once.
+    ///
+    /// Replaces the config-dir files, which lived on the per-org PVC. Dropping
+    /// that volume without moving these would regenerate the keypair on every
+    /// restart: all outstanding tokens invalid and the JWKS `kid` rotated, with
+    /// no error at startup -- it fails later, at the client.
+    ///
+    /// First boot is a race between replicas, and `get_or_create_object` is
+    /// what makes the loser adopt the winner's key rather than persist its own.
+    #[cfg(feature = "logstore")]
+    pub async fn load_or_generate_in_store(store: &uc_db::AnyPool) -> Result<Self, UcError> {
+        let bytes = store
+            .get_or_create_object(uc_db::store::action::KEYS_KEY, || {
+                Self::generate()?.encode()
+            })
+            .await?;
+        Self::decode(&bytes)
+    }
+
     /// Load from DER files, generating them if they do not exist.
     pub fn load_or_generate(config_dir: &Path) -> Result<Self, UcError> {
         let priv_path = config_dir.join("private_key.der");
@@ -88,6 +146,15 @@ impl KeyManager {
 
         Ok(km)
     }
+}
+
+/// The JWKS document for this keypair, per RFC 7517.
+///
+/// Derived on demand rather than read back from `certs.json`. The file was only
+/// ever written on the generate path, so a server that loaded existing keys --
+/// or whose certs.json was lost -- served 500s from /jwks forever.
+pub fn jwks(km: &KeyManager) -> String {
+    build_jwks(km)
 }
 
 fn build_jwks(km: &KeyManager) -> String {
@@ -167,5 +234,43 @@ mod tests {
         assert!(n_val.len() > 100, "n should be a long RSA modulus");
 
         std::fs::remove_dir_all(&dir).ok();
+    }
+}
+
+#[cfg(test)]
+mod key_material_tests {
+    use super::*;
+
+    #[test]
+    fn encode_decode_round_trips() {
+        let km = KeyManager::generate().unwrap();
+        let bytes = km.encode().unwrap();
+        let back = KeyManager::decode(&bytes).unwrap();
+        assert_eq!(back.key_id, km.key_id);
+        assert_eq!(back.private_key_der, km.private_key_der);
+        assert_eq!(back.public_key_der, km.public_key_der);
+    }
+
+    #[test]
+    fn decode_rejects_damaged_material_rather_than_half_loading() {
+        assert!(KeyManager::decode(b"not json").is_err());
+        assert!(KeyManager::decode(br#"{"key_id":"a"}"#).is_err());
+        assert!(
+            KeyManager::decode(
+                br#"{"key_id":"a","private_key_der":"zz","public_key_der":"00"}"#
+            )
+            .is_err(),
+            "non-hex must be refused, not silently truncated"
+        );
+    }
+
+    #[test]
+    fn jwks_is_derived_from_the_keypair_not_a_file() {
+        let km = KeyManager::generate().unwrap();
+        let doc = jwks(&km);
+        assert!(doc.contains(&km.key_id), "kid must match the live key");
+        assert!(doc.contains("\"kty\""), "must be a JWKS document: {doc}");
+        // Stable across calls — the handler returns it per request.
+        assert_eq!(doc, jwks(&km));
     }
 }

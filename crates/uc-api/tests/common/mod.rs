@@ -45,6 +45,7 @@ pub async fn build_test_app() -> (Router, AnyPool) {
         Arc::new(AllowingAuthorizer),
         CloudCredentialVendor::new(),
         jwt_config,
+        uc_auth::keys::jwks(&km),
         metastore.id,
         false, // no-auth
         config_dir,
@@ -156,6 +157,7 @@ pub async fn build_auth_test_app(oidc_config: Option<Arc<OidcConfig>>) -> Router
         Arc::new(AllowingAuthorizer),
         CloudCredentialVendor::new(),
         jwt_config,
+        uc_auth::keys::jwks(&km),
         metastore.id,
         true, // auth enabled
         config_dir,

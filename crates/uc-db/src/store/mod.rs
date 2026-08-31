@@ -283,6 +283,45 @@ impl StoreInner {
         self.state.read().await
     }
 
+    /// Fetch a singleton object, creating it exactly once across replicas.
+    ///
+    /// For state that must exist before the log means anything and is not
+    /// metadata — the JWT signing keypair being the case this was built for.
+    /// Such state cannot live in the log itself: it has to be readable
+    /// independently of replay, and every replica must agree on one value.
+    ///
+    /// First boot is a race. Without the conditional create, two replicas would
+    /// each generate their own keypair and each persist it, and tokens signed
+    /// by one would be rejected by the other — intermittently, depending on
+    /// which pod served the request. Here the loser discards what it made and
+    /// adopts the winner's.
+    ///
+    /// `make` may therefore run without its output being used, so it must have
+    /// no side effects beyond producing the bytes.
+    pub async fn get_or_create_object(
+        &self,
+        key: &str,
+        make: impl FnOnce() -> Result<Vec<u8>, UcError>,
+    ) -> Result<Vec<u8>, UcError> {
+        if let Some(existing) = self.log.get(key).await? {
+            return Ok(existing);
+        }
+        let candidate = make()?;
+        match self.log.put_if_absent(key, candidate.clone()).await? {
+            PutResult::Created => Ok(candidate),
+            PutResult::AlreadyExists => self.log.get(key).await?.ok_or_else(|| {
+                // Refuse rather than fall back to our own copy: something is
+                // deleting the object concurrently, and silently proceeding
+                // with a key the winner does not have is the failure this
+                // whole function exists to prevent.
+                UcError::new(
+                    ErrorCode::Internal,
+                    format!("{key} was claimed by another writer but is not readable"),
+                )
+            }),
+        }
+    }
+
     /// Pull in every commit written since our current version.
     async fn catch_up(&self) -> Result<(), UcError> {
         let mut state = self.state.write().await;
