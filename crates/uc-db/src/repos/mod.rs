@@ -18,21 +18,12 @@ repo!(schema, "schema_store.rs");
 repo!(delta, "delta_store.rs");
 repo!(metastore, "metastore_store.rs");
 repo!(property, "property_store.rs");
+repo!(table, "table_store.rs");
+repo!(volume, "volume_store.rs");
+repo!(function, "function_store.rs");
+repo!(model, "model_store.rs");
+repo!(user, "user_store.rs");
+repo!(credential, "credential_store.rs");
+repo!(external_location, "external_location_store.rs");
+repo!(staging, "staging_store.rs");
 
-// Not yet ported — SQL only, so the logstore build does not yet link them.
-#[cfg(not(feature = "logstore"))]
-pub mod credential;
-#[cfg(not(feature = "logstore"))]
-pub mod external_location;
-#[cfg(not(feature = "logstore"))]
-pub mod function;
-#[cfg(not(feature = "logstore"))]
-pub mod model;
-#[cfg(not(feature = "logstore"))]
-pub mod staging;
-#[cfg(not(feature = "logstore"))]
-pub mod table;
-#[cfg(not(feature = "logstore"))]
-pub mod user;
-#[cfg(not(feature = "logstore"))]
-pub mod volume;
