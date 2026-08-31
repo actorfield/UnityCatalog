@@ -441,24 +441,42 @@ The adapter's own restart-survival tests now run on both backends, which is the
 strongest check available for this piece: they assert that a policy written by
 one authorizer is visible to a second one constructed over the same store.
 
-### Key material
+### Key material comes from a secret store, never the object store
 
-`Store::get_or_create_object` creates a singleton exactly once across replicas:
-GET, else generate and conditionally PUT, and on losing the race re-read and
-adopt the winner's value. It refuses rather than falling back to its own copy if
-the object vanishes between the two, because proceeding with a key the winner
-does not have is the precise failure it exists to prevent.
+The JWT signing keypair is supplied by `--key-file`, the path a mounted
+Kubernetes Secret arrives at. There is **no** object-store path and no flag to
+enable one.
 
-Key material cannot live in the log itself — it has to be readable independently
-of replay, and every replica must agree on one value — so `_uc_log/_keys.json`
-is a plain object, hex-encoded JSON so it is inspectable. **Whatever holds that
-object is as sensitive as the keypair**, which is a change in where the secret
-lives: from a per-org PVC to the org's bucket prefix.
+The reason is specific rather than general caution. `uc-credentials`' vend
+calls `assume_role()` with no `.policy()`, so a vended credential carries the
+role's full permissions, and that role is scoped to a bucket rather than a
+prefix. A private key anywhere in that bucket would therefore be readable by
+anything holding a vended credential for it — which is every client that can
+ask for table credentials — and reading the signing key means forging tokens for
+any principal.
 
-Without the conditional create, two replicas booting together would each
-generate a keypair and each persist it, and tokens signed by one would be
-rejected by the other depending on which pod served the request — intermittently,
-with nothing wrong at startup.
+An earlier revision of this work did store the key at
+`<storage-root>/_uc_log/_keys.json`, guarded by an opt-in flag. That was the
+wrong shape: the exposure is silent, so a deployment that reused the data bucket
+for `--storage-root` would look completely healthy. It is gone, along with the
+`get_or_create_object` primitive that existed only to serve it.
+
+Consequences, all deliberate:
+
+  - **A file, not an environment variable.** Env vars are inherited by child
+    processes, appear in crash dumps and process listings, and are easy to log
+    by accident. Secrets mount as files.
+  - **A missing key file is a startup error**, never a cue to generate. Silently
+    minting a keypair invalidates every issued token while looking like a clean
+    start — the exact failure the PVC removal originally introduced.
+  - **No config-dir fallback under `logstore`.** Generating on a stateless
+    replica would mint a different keypair per pod.
+  - `--generate-key-file <path>` is the only way to produce one: a one-shot mode
+    that writes and exits, and refuses to overwrite an existing file. A separate
+    mode rather than a fallback, for the reason above.
+
+The SQLite path keeps generating into the config dir when no `--key-file` is
+given, since that is local dev on a machine with no secret store.
 
 ### The /jwks endpoint no longer reads a file
 

@@ -87,23 +87,37 @@ impl KeyManager {
         })
     }
 
-    /// Load the org's keypair from the log store, generating it exactly once.
+    /// Load key material from a file — the way a mounted Kubernetes Secret
+    /// arrives.
     ///
-    /// Replaces the config-dir files, which lived on the per-org PVC. Dropping
-    /// that volume without moving these would regenerate the keypair on every
-    /// restart: all outstanding tokens invalid and the JWKS `kid` rotated, with
-    /// no error at startup -- it fails later, at the client.
+    /// This is the preferred source in any deployment that has a secret store.
+    /// It never generates: a configured-but-missing key file is an error, not a
+    /// cue to mint a fresh keypair. Silently generating is the failure that
+    /// invalidates every issued token while looking like a clean start.
     ///
-    /// First boot is a race between replicas, and `get_or_create_object` is
-    /// what makes the loser adopt the winner's key rather than persist its own.
-    #[cfg(feature = "logstore")]
-    pub async fn load_or_generate_in_store(store: &uc_db::AnyPool) -> Result<Self, UcError> {
-        let bytes = store
-            .get_or_create_object(uc_db::store::action::KEYS_KEY, || {
-                Self::generate()?.encode()
-            })
-            .await?;
+    /// A file rather than an environment variable on purpose. Env vars are
+    /// inherited by child processes, surface in crash dumps and process
+    /// listings, and are easy to log by accident; a mounted file is readable
+    /// only by the process that opens it. Secrets mount as files.
+    pub fn load_from_file(path: &Path) -> Result<Self, UcError> {
+        let bytes = std::fs::read(path).map_err(|e| {
+            UcError::new(
+                ErrorCode::Internal,
+                format!("key file {}: {e}", path.display()),
+            )
+        })?;
         Self::decode(&bytes)
+    }
+
+    /// Write key material in the format `load_from_file` reads, for generating
+    /// the contents of a Secret out of band.
+    pub fn write_to_file(&self, path: &Path) -> Result<(), UcError> {
+        std::fs::write(path, self.encode()?).map_err(|e| {
+            UcError::new(
+                ErrorCode::Internal,
+                format!("key file {}: {e}", path.display()),
+            )
+        })
     }
 
     /// Load from DER files, generating them if they do not exist.

@@ -31,6 +31,25 @@ struct Args {
     #[arg(long, default_value = "sqlite:./etc/db/uc.db?mode=rwc")]
     database_url: String,
 
+    /// Path to JWT signing key material, as written by `KeyManager::encode` —
+    /// how a mounted Kubernetes Secret arrives.
+    ///
+    /// Preferred over every other source. When set, the key is loaded from here
+    /// and never generated: a configured-but-missing file is a startup error,
+    /// because silently minting a fresh keypair invalidates every issued token
+    /// while looking like a clean start.
+    #[arg(long)]
+    key_file: Option<PathBuf>,
+
+    /// Generate fresh JWT signing key material at this path, then exit.
+    ///
+    /// The one supported way to produce a `--key-file`, for loading into a
+    /// secret store. A separate mode rather than a fallback: generating as a
+    /// side effect of a failed load is what silently rotates a live key and
+    /// invalidates every issued token. Refuses to overwrite an existing file.
+    #[arg(long)]
+    generate_key_file: Option<PathBuf>,
+
     /// Object-store root for the log-structured metadata store, as
     /// `s3://bucket/prefix`. Only used when built with `--features logstore`,
     /// where it replaces --database-url entirely: there is no database, no
@@ -146,6 +165,20 @@ async fn main() -> anyhow::Result<()> {
         .with(tracing_subscriber::fmt::layer().with_ansi(false))
         .init();
 
+    // One-shot mode: produce key material and exit without starting anything.
+    if let Some(ref path) = args.generate_key_file {
+        if path.exists() {
+            anyhow::bail!(
+                "{} already exists; refusing to overwrite live key material",
+                path.display()
+            );
+        }
+        let km = KeyManager::generate().context("Failed to generate RSA keys")?;
+        km.write_to_file(path).context("Failed to write key file")?;
+        info!("Wrote key material to {} (kid {})", path.display(), km.key_id);
+        return Ok(());
+    }
+
     info!("Starting Unity Catalog server on port {}", args.port);
     info!("Config dir: {}", args.config_dir.display());
     #[cfg(not(feature = "logstore"))]
@@ -159,13 +192,28 @@ async fn main() -> anyhow::Result<()> {
 
     // ── 1-2. Store and key material ───────────────────────────────────────────
     //
-    // These two are ordered differently per backend and so are opened together.
-    // On the log store the keypair lives *in* the store, so the store has to
-    // exist first; with SQLite the keys are files and come first.
+    // Key material never goes into the object store. UC vends bucket-scoped
+    // credentials with no session policy (uc-credentials' assume_role sets no
+    // `.policy()`), so a private key anywhere in that bucket is readable by
+    // anything holding a vended credential, which would let it forge tokens for
+    // any principal. There is deliberately no flag to opt into that.
     #[cfg(not(feature = "logstore"))]
     let (pool, key_manager, s3_info) = {
-        let key_manager = KeyManager::load_or_generate(&args.config_dir)
-            .context("Failed to initialize RSA keys")?;
+        let key_manager = match args.key_file {
+            Some(ref path) => {
+                info!("Keys:       {}", path.display());
+                KeyManager::load_from_file(path).context("Failed to load key file")?
+            }
+            None => {
+                // Local dev only: generated into the config dir on first run.
+                info!(
+                    "Keys:       {} (generated if absent)",
+                    args.config_dir.display()
+                );
+                KeyManager::load_or_generate(&args.config_dir)
+                    .context("Failed to initialize RSA keys")?
+            }
+        };
         let (actual_db_url, s3_info) = prepare_database_url(&args.config_dir, &args.database_url)
             .await
             .context("Failed to prepare database URL")?;
@@ -181,15 +229,26 @@ async fn main() -> anyhow::Result<()> {
 
     #[cfg(feature = "logstore")]
     let (pool, key_manager) = {
+        // A mounted Secret is the only supported source here. There is no
+        // config-dir fallback either: generating on a stateless replica would
+        // mint a different keypair per pod.
+        let key_path = args.key_file.as_ref().ok_or_else(|| {
+            anyhow::anyhow!(
+                "--key-file is required: JWT signing key material must come from a \
+                 secret store, mounted as a file"
+            )
+        })?;
+        info!("Keys:       {}", key_path.display());
+        let key_manager =
+            KeyManager::load_from_file(key_path).context("Failed to load key file")?;
+
         let pool = open_log_store(&args.storage_root)
             .await
             .context("Failed to open the metadata log")?;
-        info!("Log store replayed to version {}", pool.snapshot().await.version);
-        // Generated exactly once per org and shared by every replica; see
-        // Store::get_or_create_object for why the conditional create matters.
-        let key_manager = KeyManager::load_or_generate_in_store(&pool)
-            .await
-            .context("Failed to initialize RSA keys")?;
+        info!(
+            "Log store replayed to version {}",
+            pool.snapshot().await.version
+        );
         (pool, key_manager)
     };
 

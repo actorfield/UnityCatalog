@@ -180,7 +180,6 @@ pub fn checkpoint_key(version: u64) -> String {
 }
 
 pub const LAST_CHECKPOINT_KEY: &str = "_uc_log/_last_checkpoint";
-pub const KEYS_KEY: &str = "_uc_log/_keys.json";
 
 /// Parse a version back out of a main-log commit key.
 ///
