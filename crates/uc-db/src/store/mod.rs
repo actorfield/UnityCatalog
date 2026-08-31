@@ -7,6 +7,7 @@
 pub mod action;
 pub mod delta_log;
 pub mod log;
+pub mod memory;
 
 #[cfg(test)]
 mod tests;

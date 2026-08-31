@@ -1,11 +1,10 @@
-// Exercises the SQL repo layer directly against sqlite::memory:. Nine of the
-// modules it imports are not ported to the log store yet, so under `logstore`
-// they do not exist -- skip the file wholesale rather than half-gate it. Delete
-// this attribute once the port is complete and these tests run on both paths.
-#![cfg(not(feature = "logstore"))]
+//! Integration tests for the uc-db repositories — every repo method directly,
+//! no HTTP layer.
+//!
+//! The same suite runs against both backends: in-memory SQLite by default, and
+//! the log-structured store under `--features logstore`. That is the point —
+//! the port claims identical repo semantics, and this is what checks it.
 
-/// Integration tests for uc-db repositories using in-memory SQLite.
-/// These test every repo method directly — no HTTP layer.
 use uc_db::{
     models::{
         credential::CredentialRow,
@@ -15,7 +14,6 @@ use uc_db::{
         table::{ColumnRow, TableRow},
         volume::VolumeRow,
     },
-    pool::run_migrations,
     repos::{
         catalog, credential, delta, external_location, metastore, property, schema, staging, table,
         user, volume,
@@ -24,12 +22,21 @@ use uc_db::{
 };
 use uuid::Uuid;
 
+#[cfg(not(feature = "logstore"))]
 async fn setup_pool() -> AnyPool {
     let pool = AnyPool::connect("sqlite::memory:")
         .await
         .expect("in-memory pool");
-    run_migrations(&pool).await.expect("migrations");
+    uc_db::pool::run_migrations(&pool).await.expect("migrations");
     pool
+}
+
+#[cfg(feature = "logstore")]
+async fn setup_pool() -> AnyPool {
+    use std::sync::Arc;
+    AnyPool::open(Arc::new(uc_db::store::memory::MemoryLog::new()))
+        .await
+        .expect("in-memory log store")
 }
 
 fn now() -> i64 {

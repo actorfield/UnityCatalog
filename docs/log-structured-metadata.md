@@ -326,14 +326,26 @@ worth choosing now — but worth not pretending multi-replica arrives for free.
 
 ## Sequencing
 
-  1. `store/` module: actions, log, replay, checkpoint, in-memory indices  <- sketched
-  2. port repos/catalog.rs as the worked example                           <- sketched
-  3. port remaining 8 repo modules
-  4. port the 19 direct sqlx sites in uc-api
+  1. `store/` module: actions, log, replay, checkpoint, in-memory indices  DONE
+  2. port repos/catalog.rs as the worked example                           DONE
+  3. port the remaining 12 repo modules                                    DONE
+  4. port the 19 direct sqlx sites in uc-api                               <- next
   5. casbin policy off the pool
   6. keys to _keys.json
   7. drop PVC from k8s_effects.rs, pass --storage-root instead of --database-url
   8. rename AnyPool -> Store
+
+### How the port is checked
+
+`tests/test_repos.rs` was written against SQLite and now runs unmodified against
+both backends — `cargo test -p uc-db --test test_repos`, with and without
+`--features logstore`. The port's whole claim is that repo semantics are
+identical, so the same suite passing on both is the evidence for it. Any
+divergence introduced later fails there rather than in production.
+
+`store::memory::MemoryLog` is public for this reason: it is the reference
+implementation of the `ObjectLog` contract, and it lets callers outside the
+crate exercise the store without an object store.
 
 Steps 1-6 keep the SQLite build working behind a feature flag, so the cutover in
 7 is the only irreversible step.

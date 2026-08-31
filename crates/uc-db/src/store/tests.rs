@@ -8,43 +8,8 @@ use super::action::{Action, EntityKind};
 use super::log::{ObjectLog, PutResult};
 use super::{natural_key_for, pad_i64};
 use super::*;
-use std::collections::BTreeMap;
-use std::sync::Mutex;
 
-#[derive(Default)]
-struct MemLog {
-    objects: Mutex<BTreeMap<String, Vec<u8>>>,
-}
-
-#[async_trait::async_trait]
-impl ObjectLog for MemLog {
-    async fn put_if_absent(&self, key: &str, body: Vec<u8>) -> Result<PutResult, UcError> {
-        let mut o = self.objects.lock().unwrap();
-        if o.contains_key(key) {
-            return Ok(PutResult::AlreadyExists);
-        }
-        o.insert(key.to_string(), body);
-        Ok(PutResult::Created)
-    }
-    async fn get(&self, key: &str) -> Result<Option<Vec<u8>>, UcError> {
-        Ok(self.objects.lock().unwrap().get(key).cloned())
-    }
-    async fn list_after(&self, prefix: &str, start_after: &str) -> Result<Vec<String>, UcError> {
-        Ok(self
-            .objects
-            .lock()
-            .unwrap()
-            .keys()
-            .filter(|k| k.starts_with(prefix) && k.as_str() > start_after)
-            .cloned()
-            .collect())
-    }
-    async fn put(&self, key: &str, body: Vec<u8>) -> Result<(), UcError> {
-        self.objects.lock().unwrap().insert(key.to_string(), body);
-        Ok(())
-    }
-}
-
+use super::memory::MemoryLog as MemLog;
 use put_catalog_helper as put_catalog;
 
 fn catalog(name: &str) -> serde_json::Value {
@@ -289,7 +254,7 @@ async fn a_gap_in_the_log_is_refused_rather_than_partially_applied() {
     put_catalog(&store, "beta").await.unwrap();
 
     // Simulate a deleted commit.
-    log.objects.lock().unwrap().remove(&action::commit_key(1));
+    log.remove(&action::commit_key(1));
 
     let err = match Store::open(log).await {
         Err(e) => e,
