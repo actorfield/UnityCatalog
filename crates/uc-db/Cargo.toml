@@ -8,6 +8,10 @@ license.workspace = true
 default = ["sqlite"]
 sqlite = ["sqlx/sqlite"]
 postgres = ["sqlx/postgres"]
+# Swaps AnyPool from a sqlx pool to the log-structured Store, and selects the
+# `*_store.rs` repo bodies over the SQL ones. Off by default: the SQL path stays
+# the shipping path until the port is complete.
+logstore = []
 
 [dependencies]
 uc-errors = { path = "../uc-errors" }

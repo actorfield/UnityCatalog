@@ -65,6 +65,31 @@ impl Snapshot {
             .collect()
     }
 
+    /// Ordered scan within a natural-key prefix — the `WHERE parent_id = $1 AND
+    /// name > $2 ORDER BY name` shape that every child entity paginates with.
+    ///
+    /// `after` compares against the portion *after* the prefix, matching the SQL
+    /// where the page token is a bare name, not a composite key.
+    pub fn scan_prefix(
+        &self,
+        kind: EntityKind,
+        prefix: &str,
+        after: Option<&str>,
+        limit: usize,
+    ) -> Vec<&serde_json::Value> {
+        let start = format!("{prefix}{}", after.unwrap_or(""));
+        self.by_natural_key
+            .range((kind, start)..)
+            .take_while(|((k, nk), _)| *k == kind && nk.starts_with(prefix))
+            .filter(|((_, nk), _)| match after {
+                Some(a) => &nk[prefix.len()..] > a,
+                None => true,
+            })
+            .filter_map(|(_, id)| self.get(kind, *id))
+            .take(limit)
+            .collect()
+    }
+
     /// Apply one action. Must be deterministic and total — replay correctness
     /// depends on identical input producing identical state.
     fn apply(&mut self, act: &Action) {
