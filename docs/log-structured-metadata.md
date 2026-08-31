@@ -379,8 +379,8 @@ worth choosing now — but worth not pretending multi-replica arrives for free.
   2. port repos/catalog.rs as the worked example                           DONE
   3. port the remaining 12 repo modules                                    DONE
   4. port the 19 direct sqlx sites in uc-api                               DONE
-  5. casbin policy off the pool                                            <- next
-  6. keys to _keys.json
+  5. casbin policy off the pool                                            DONE
+  6. keys to _keys.json                                                    <- next
   7. drop PVC from k8s_effects.rs, pass --storage-root instead of --database-url
   8. rename AnyPool -> Store
 
@@ -410,6 +410,35 @@ is narrow on purpose:
     idempotent, monotonic change where last-write-wins converges. Setting a
     latched flag qualifies; incrementing a counter would not. That constraint
     is documented at the function, not assumed.
+
+### Casbin
+
+The adapter spoke sqlx directly. Its whole surface reduces to five primitives —
+load_all, insert, delete, delete_many, replace_all, clear — which now live in
+`repos::casbin` with a body per backend. `uc-auth` no longer depends on sqlx
+either, and its `sqlite`/`postgres` features forward to uc-db rather than to a
+driver, since the crate has no reason to know one exists.
+
+`CasbinRule` deliberately carries no id. SQLite uses an INTEGER AUTOINCREMENT
+surrogate and the log store a UUID; neither means anything to casbin, whose
+identity for a rule is the (ptype, v0..v5) tuple — which is also the UNIQUE
+INDEX, and so the natural key.
+
+Two things worth noting:
+
+**`ORDER BY id` survives only because ids are UUIDv7.** The SQL orders by the
+autoincrement surrogate, i.e. insertion order. `Snapshot::iter_by_id` reproduces
+that by sorting on the UUID, which is creation-ordered under v7 and would be
+arbitrary under v4. The v7 change was made for other reasons; this depends on it.
+
+**`save_policy` gets strictly safer.** The SQL wraps delete-then-insert in a
+transaction with a comment about "minimising the window where the table is
+empty" — an authorizer reading mid-replace sees no policy and denies everything.
+As a single commit that window does not exist rather than merely being short.
+
+The adapter's own restart-survival tests now run on both backends, which is the
+strongest check available for this piece: they assert that a policy written by
+one authorizer is visible to a second one constructed over the same store.
 
 ### How the port is checked
 

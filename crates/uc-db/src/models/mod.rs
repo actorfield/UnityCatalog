@@ -1,3 +1,4 @@
+pub mod casbin;
 pub mod catalog;
 pub mod credential;
 pub mod delta;

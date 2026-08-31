@@ -13,6 +13,7 @@ macro_rules! repo {
     };
 }
 
+repo!(casbin, "casbin_store.rs");
 repo!(catalog, "catalog_store.rs");
 repo!(schema, "schema_store.rs");
 repo!(delta, "delta_store.rs");

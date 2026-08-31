@@ -44,6 +44,10 @@ impl Snapshot {
         self.entities.get(&kind)?.get(&id)
     }
 
+    pub fn id_by_natural_key(&self, kind: EntityKind, key: &str) -> Option<Uuid> {
+        self.by_natural_key.get(&(kind, key.to_string())).copied()
+    }
+
     pub fn get_by_natural_key(&self, kind: EntityKind, key: &str) -> Option<&serde_json::Value> {
         let id = self.by_natural_key.get(&(kind, key.to_string()))?;
         self.get(kind, *id)
@@ -99,6 +103,21 @@ impl Snapshot {
     /// index for each would cost more than it saves at these row counts.
     pub fn iter(&self, kind: EntityKind) -> impl Iterator<Item = &serde_json::Value> {
         self.entities.get(&kind).into_iter().flat_map(|m| m.values())
+    }
+
+    /// Every row of one kind with its id, ordered by id.
+    ///
+    /// With UUIDv7 ids that is creation order, which is what stands in for the
+    /// SQL `ORDER BY id` on an AUTOINCREMENT surrogate.
+    pub fn iter_by_id(&self, kind: EntityKind) -> Vec<(Uuid, &serde_json::Value)> {
+        let mut rows: Vec<(Uuid, &serde_json::Value)> = self
+            .entities
+            .get(&kind)
+            .into_iter()
+            .flat_map(|m| m.iter().map(|(id, v)| (*id, v)))
+            .collect();
+        rows.sort_by_key(|(id, _)| *id);
+        rows
     }
 
     /// Every natural key under a prefix, with its id. Unlike `scan_prefix` this
@@ -211,7 +230,8 @@ impl Snapshot {
     }
 }
 
-pub struct Store {
+/// The shared interior. Separated so `Store` can be a cheap handle.
+pub struct StoreInner {
     log: Arc<dyn ObjectLog>,
     state: RwLock<Snapshot>,
     /// Delta commits live in their own per-table logs rather than in `state`.
@@ -219,18 +239,46 @@ pub struct Store {
     pub delta: delta_log::DeltaLog,
 }
 
+/// A handle to a log-structured store.
+///
+/// `Clone` and cheap, sharing one in-memory snapshot between clones — the same
+/// contract `sqlx::SqlitePool` has, which is what lets it stand in as `AnyPool`
+/// at call sites that clone the handle around.
+#[derive(Clone)]
+pub struct Store {
+    inner: Arc<StoreInner>,
+}
+
+#[cfg(test)]
+impl Store {
+    async fn put_catalog_for_test(&self, name: &str) -> Result<Uuid, UcError> {
+        tests::put_catalog_helper(self, name).await
+    }
+}
+
+impl std::ops::Deref for Store {
+    type Target = StoreInner;
+    fn deref(&self) -> &StoreInner {
+        &self.inner
+    }
+}
+
 impl Store {
     /// Replay the log into memory. Called once at startup, before serving.
     pub async fn open(log: Arc<dyn ObjectLog>) -> Result<Self, UcError> {
         let store = Self {
-            delta: delta_log::DeltaLog::new(log.clone()),
-            log,
-            state: RwLock::new(Snapshot::default()),
+            inner: Arc::new(StoreInner {
+                delta: delta_log::DeltaLog::new(log.clone()),
+                log,
+                state: RwLock::new(Snapshot::default()),
+            }),
         };
         store.catch_up().await?;
         Ok(store)
     }
+}
 
+impl StoreInner {
     pub async fn snapshot(&self) -> tokio::sync::RwLockReadGuard<'_, Snapshot> {
         self.state.read().await
     }
@@ -336,11 +384,6 @@ impl Store {
         }
     }
 
-    #[cfg(test)]
-    async fn put_catalog_for_test(&self, name: &str) -> Result<Uuid, UcError> {
-        tests::put_catalog_helper(self, name).await
-    }
-
     async fn write_checkpoint(&self, version: u64) -> Result<(), UcError> {
         let (body, size) = {
             let state = self.state.read().await;
@@ -424,12 +467,24 @@ fn natural_key_for(kind: EntityKind, body: &serde_json::Value) -> Option<String>
         // uc_metastore, uc_function_parameters, uc_model_versions (its
         // (registered_model_id, version) index is not unique),
         // uc_staging_tables, uc_dependencies, casbin_rule.
+        // UNIQUE INDEX idx_casbin_rule ON casbin_rule(ptype, v0..v5)
+        EntityKind::CasbinRule => Some(
+            [
+                s("ptype")?,
+                s("v0")?,
+                s("v1")?,
+                s("v2")?,
+                s("v3")?,
+                s("v4")?,
+                s("v5")?,
+            ]
+            .join("\u{0}"),
+        ),
         EntityKind::Metastore
         | EntityKind::FunctionParameter
         | EntityKind::ModelVersion
         | EntityKind::StagingTable
-        | EntityKind::Dependency
-        | EntityKind::CasbinRule => None,
+        | EntityKind::Dependency => None,
     }
 }
 

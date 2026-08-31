@@ -6,8 +6,12 @@ license.workspace = true
 
 [features]
 default = ["sqlite"]
-sqlite = ["sqlx/sqlite"]
-postgres = ["sqlx/postgres"]
+# Forwarded to uc-db rather than sqlx: this crate speaks no SQL of its own, so
+# it has no reason to depend on a driver. The features exist only to pass the
+# backend choice through from uc-server.
+sqlite = ["uc-db/sqlite"]
+postgres = ["uc-db/postgres"]
+logstore = ["uc-db/logstore"]
 
 [dependencies]
 uc-errors = { path = "../uc-errors" }
@@ -15,7 +19,6 @@ uc-types = { path = "../uc-types" }
 uc-db = { path = "../uc-db" }
 jsonwebtoken = { workspace = true }
 casbin = { workspace = true }
-sqlx = { workspace = true }
 uuid = { workspace = true }
 chrono = { workspace = true }
 serde = { workspace = true }
