@@ -6,8 +6,11 @@ license.workspace = true
 
 [features]
 default = ["sqlite"]
-sqlite = ["sqlx/sqlite"]
-postgres = ["sqlx/postgres"]
+# `sql` is what actually pulls sqlx in. Both SQL backends imply it; `logstore`
+# does not, so a log-store build links no database driver at all.
+sql = ["dep:sqlx"]
+sqlite = ["sql", "sqlx/sqlite"]
+postgres = ["sql", "sqlx/postgres"]
 # Swaps AnyPool from a sqlx pool to the log-structured Store, and selects the
 # `*_store.rs` repo bodies over the SQL ones. Off by default: the SQL path stays
 # the shipping path until the port is complete.
@@ -20,7 +23,7 @@ s3 = ["dep:aws-sdk-s3", "dep:aws-config"]
 uc-errors = { path = "../uc-errors" }
 uc-types = { path = "../uc-types" }
 uc-openapi = { path = "../uc-openapi" }
-sqlx = { workspace = true }
+sqlx = { workspace = true, optional = true }
 tokio = { workspace = true }
 async-trait = { workspace = true }
 aws-sdk-s3 = { workspace = true, optional = true }

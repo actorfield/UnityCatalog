@@ -1,5 +1,4 @@
 use serde::{Deserialize, Serialize};
-use sqlx::FromRow;
 
 /// One row of the casbin policy table.
 ///
@@ -7,7 +6,8 @@ use sqlx::FromRow;
 /// surrogate and the log store uses a UUID; neither is meaningful to casbin,
 /// whose identity for a rule is the (ptype, v0..v5) tuple. Keeping the id out
 /// of the shared type is what lets one repo API serve both.
-#[derive(Debug, Clone, PartialEq, Eq, FromRow, Serialize, Deserialize)]
+#[cfg_attr(feature = "sql", derive(sqlx::FromRow))]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CasbinRule {
     pub ptype: String,
     pub v0: String,

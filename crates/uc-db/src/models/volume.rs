@@ -1,8 +1,8 @@
 use serde::{Deserialize, Serialize};
-use sqlx::FromRow;
 use uuid::Uuid;
 
-#[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
+#[cfg_attr(feature = "sql", derive(sqlx::FromRow))]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct VolumeRow {
     pub id: Uuid,
     pub schema_id: Uuid,

@@ -54,6 +54,11 @@ For the log-structured object store, with no database at all:
 cargo build --no-default-features --features logstore
 ```
 
+`--no-default-features` matters: it drops `sqlx` and its driver entirely,
+taking uc-db from 204 transitive dependencies to 84. Building with
+`--features logstore` alone still works — the log store takes precedence — but
+leaves the unused SQL driver linked in.
+
 ### 2. Run the server
 
 ```bash
