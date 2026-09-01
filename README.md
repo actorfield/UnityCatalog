@@ -144,6 +144,26 @@ consistent, bounded by `--refresh-interval-secs`.
 See [docs/log-structured-metadata.md](docs/log-structured-metadata.md) for the
 design and its limits.
 
+## Observability
+
+Traces are exported over OTLP when `OTEL_EXPORTER_OTLP_ENDPOINT` is set, and the
+whole stack is inert otherwise — no exporter, no batch processor, no span layer.
+Configured through the standard `OTEL_*` variables rather than bespoke flags.
+
+```bash
+OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4317 \
+OTEL_SERVICE_NAME=uc-server \
+./target/release/uc-server --storage-root s3://bucket/org --oidc-issuer https://...
+```
+
+Spans: `http.request` wraps each request, with `store.commit` (carrying
+`uc.operation`, the version that landed, and how many attempts contention cost),
+`store.catch_up`, and the individual `s3.*` object operations nested beneath it.
+That is enough to see whether a slow request was spent in the object store or
+waiting on a conditional-write retry.
+
+`SIGTERM` drains in-flight requests and flushes pending spans before exit.
+
 ## CLI Options
 
 ```

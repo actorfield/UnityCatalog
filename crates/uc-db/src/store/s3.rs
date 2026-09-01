@@ -53,6 +53,8 @@ impl S3Log {
 
 #[async_trait::async_trait]
 impl ObjectLog for S3Log {
+    #[tracing::instrument(name = "s3.put_if_absent", skip_all, fields(uc.key = key))]
+    #[tracing::instrument(name = "s3.put_if_absent", skip_all, fields(uc.key = key))]
     async fn put_if_absent(&self, key: &str, body: Vec<u8>) -> Result<PutResult, UcError> {
         let full = self.full(key);
         let result = self
@@ -89,6 +91,8 @@ impl ObjectLog for S3Log {
         }
     }
 
+    #[tracing::instrument(name = "s3.get", skip_all, fields(uc.key = key))]
+    #[tracing::instrument(name = "s3.get", skip_all, fields(uc.key = key))]
     async fn get(&self, key: &str) -> Result<Option<Vec<u8>>, UcError> {
         let full = self.full(key);
         match self
@@ -118,6 +122,8 @@ impl ObjectLog for S3Log {
     /// One page, as the trait allows. `log::list_all_after` drives it to
     /// exhaustion, so a large partition costs round trips rather than a
     /// silently short answer.
+    #[tracing::instrument(name = "s3.list_after", skip_all, fields(uc.prefix = prefix))]
+    #[tracing::instrument(name = "s3.list_after", skip_all, fields(uc.prefix = prefix))]
     async fn list_after(&self, prefix: &str, start_after: &str) -> Result<Vec<String>, UcError> {
         let out = self
             .client
@@ -137,6 +143,8 @@ impl ObjectLog for S3Log {
             .collect())
     }
 
+    #[tracing::instrument(name = "s3.put", skip_all, fields(uc.key = key))]
+    #[tracing::instrument(name = "s3.put", skip_all, fields(uc.key = key))]
     async fn put(&self, key: &str, body: Vec<u8>) -> Result<(), UcError> {
         let full = self.full(key);
         self.client

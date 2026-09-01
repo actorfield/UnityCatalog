@@ -6,8 +6,9 @@ use std::{
     path::PathBuf,
     sync::Arc,
 };
+mod telemetry;
+
 use tracing::info;
-use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 use uc_api::{catalog_api, control_api, delta_api, middleware::auth_middleware, state::AppState};
 use uc_auth::{AllowingAuthorizer, JwkSet, OidcConfig, UcAuthorizer};
 use uc_credentials::CloudCredentialVendor;
@@ -149,14 +150,7 @@ async fn bootstrap_operator_principal(
 async fn main() -> anyhow::Result<()> {
     let args = Args::parse();
 
-    tracing_subscriber::registry()
-        .with(
-            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| {
-                format!("uc_server={l},uc_api={l},uc_db={l}", l = args.log_level).into()
-            }),
-        )
-        .with(tracing_subscriber::fmt::layer().with_ansi(false))
-        .init();
+    let telemetry = telemetry::init(&args.log_level)?;
 
     info!("Starting Unity Catalog server on port {}", args.port);
     info!("Config dir: {}", args.config_dir.display());
@@ -292,6 +286,20 @@ async fn main() -> anyhow::Result<()> {
             state.clone(),
             auth_middleware,
         ))
+        // Outermost, so every request gets a span that the store and S3 spans
+        // hang off. Without a parent span the store timings arrive orphaned and
+        // cannot be attributed to a request.
+        .layer(
+            tower_http::trace::TraceLayer::new_for_http().make_span_with(
+                |req: &axum::http::Request<_>| {
+                    tracing::info_span!(
+                        "http.request",
+                        http.method = %req.method(),
+                        http.route = %req.uri().path(),
+                    )
+                },
+            ),
+        )
         // Registered after the auth layer so it is *not* wrapped by it: an
         // unauthenticated liveness/readiness endpoint that validates the HTTP
         // stack is up (unlike a tcpSocket probe). Returns 200 OK, no auth.
@@ -305,11 +313,51 @@ async fn main() -> anyhow::Result<()> {
         .await
         .context("Failed to bind to port")?;
 
-    // Nothing to flush at exit: every commit is already durable in the object
-    // store by the time it is acknowledged. The shutdown channel that used to
-    // live here existed only to push the SQLite file back to S3.
-    axum::serve(listener, app).await.context("Server error")?;
+    // No metadata needs flushing at exit: a commit is durable in the object
+    // store before the handler that made it returns, so nothing acknowledged
+    // can be lost. What draining buys is that in-flight requests get their
+    // response instead of a connection reset -- on a rolling deploy that is the
+    // difference between clean 200s and a burst of client errors, including for
+    // writes that actually succeeded.
+    axum::serve(listener, app)
+        .with_graceful_shutdown(shutdown_signal())
+        .await
+        .context("Server error")?;
+
+    // Export whatever spans the batch processor still holds. These are the last
+    // seconds before exit -- the ones describing why the process is going away.
+    telemetry.shutdown();
     Ok(())
+}
+
+/// Resolves on SIGTERM (what a kubelet sends) or Ctrl-C.
+async fn shutdown_signal() {
+    let ctrl_c = async {
+        let _ = tokio::signal::ctrl_c().await;
+    };
+
+    #[cfg(unix)]
+    let terminate = async {
+        match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
+            Ok(mut sig) => {
+                sig.recv().await;
+            }
+            // Without a handler the default disposition kills the process, so
+            // failing to install one must not leave this future pending
+            // forever -- that would hang shutdown entirely.
+            Err(e) => {
+                tracing::error!(error = %e, "cannot listen for SIGTERM; shutdown will be abrupt");
+                std::future::pending::<()>().await;
+            }
+        }
+    };
+    #[cfg(not(unix))]
+    let terminate = std::future::pending::<()>();
+
+    tokio::select! {
+        () = ctrl_c => info!("interrupt received, draining"),
+        () = terminate => info!("SIGTERM received, draining"),
+    }
 }
 
 // ── Log-structured store ────────────────────────────────────────────────────────

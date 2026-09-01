@@ -295,8 +295,11 @@ impl StoreInner {
     /// Note this holds the write lock across the listing, so readers block for
     /// the duration — fine for a metadata log, not a pattern to copy for a hot
     /// path.
+    #[tracing::instrument(name = "store.catch_up", skip(self), fields(uc.from, uc.to))]
+    #[tracing::instrument(name = "store.catch_up", skip(self), fields(uc.from, uc.to))]
     pub async fn catch_up(&self) -> Result<(), UcError> {
         let mut state = self.state.write().await;
+        tracing::Span::current().record("uc.from", state.version);
         if state.version == 0 {
             if let Some((version, body)) = log::resolve_checkpoint(&*self.log).await? {
                 *state = Snapshot::decode_checkpoint(&body)?;
@@ -309,6 +312,7 @@ impl StoreInner {
             }
             state.version = version;
         }
+        tracing::Span::current().record("uc.to", state.version);
         Ok(())
     }
 
@@ -324,11 +328,21 @@ impl StoreInner {
     /// precondition against the commit that just beat it. A retry that reused
     /// the previously built actions would cheerfully write a duplicate name at
     /// N+2. So `build` re-runs, and it is where `AlreadyExists` is raised.
+    #[tracing::instrument(
+        name = "store.commit",
+        skip(self, build),
+        fields(uc.operation = operation, uc.version, uc.attempts, uc.actions)
+    )]
+    #[tracing::instrument(
+        name = "store.commit",
+        skip(self, build),
+        fields(uc.operation = operation, uc.version, uc.attempts, uc.actions)
+    )]
     pub async fn commit<T, F>(&self, operation: &str, mut build: F) -> Result<T, UcError>
     where
         F: FnMut(&Snapshot) -> Result<(Vec<Action>, T), UcError>,
     {
-        for _ in 0..MAX_COMMIT_ATTEMPTS {
+        for attempt in 1..=MAX_COMMIT_ATTEMPTS {
             let (actions, out, target) = {
                 let state = self.state.read().await;
                 let (actions, out) = build(&state)?;
@@ -340,6 +354,7 @@ impl StoreInner {
             // no-op path called once per startup -- get_or_init is exactly
             // that -- would grow the log forever without changing any state.
             if actions.is_empty() {
+                tracing::Span::current().record("uc.actions", 0);
                 return Ok(out);
             }
 
@@ -368,6 +383,12 @@ impl StoreInner {
                         state.version = target;
                     }
                     drop(state);
+                    // Recorded on success only: a caller reading these wants
+                    // the version that landed and how much contention it took.
+                    let span = tracing::Span::current();
+                    span.record("uc.version", target);
+                    span.record("uc.attempts", attempt);
+                    span.record("uc.actions", actions.len());
                     self.maybe_checkpoint(target).await;
                     return Ok(out);
                 }

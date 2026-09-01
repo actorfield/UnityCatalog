@@ -39,6 +39,13 @@ panic = "warn"
 indexing_slicing = "warn"
 
 [workspace.dependencies]
+# OpenTelemetry. Traces are exported over OTLP to a collector; the whole stack
+# is inert unless OTEL_EXPORTER_OTLP_ENDPOINT is set, so a deployment that wants
+# no telemetry pays nothing for it.
+opentelemetry = "0.32"
+opentelemetry_sdk = { version = "0.32", features = ["rt-tokio"] }
+opentelemetry-otlp = { version = "0.32", default-features = false, features = ["trace", "grpc-tonic"] }
+tracing-opentelemetry = "0.33"
 axum = { version = "0.7", features = ["macros"] }
 tower = { version = "0.4", features = ["util"] }
 tower-http = { version = "0.5", features = ["trace", "cors"] }
@@ -46,7 +53,9 @@ tower-http = { version = "0.5", features = ["trace", "cors"] }
 # signal (checked via grep) -- uc-server does use tokio::fs (local_path
 # read/write in main.rs), so that stays. hyper/reqwest/axum will still
 # pull whatever tokio features *they* need transitively regardless.
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "fs"] }
+# "signal" for graceful shutdown: without a SIGTERM handler the default
+# disposition kills the process instantly and in-flight requests are severed.
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "fs", "signal"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sqlx = { version = "0.7", features = ["runtime-tokio-rustls", "uuid", "chrono"] }
