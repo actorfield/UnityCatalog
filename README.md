@@ -156,13 +156,32 @@ OTEL_SERVICE_NAME=uc-server \
 ./target/release/uc-server --storage-root s3://bucket/org --oidc-issuer https://...
 ```
 
-Spans: `http.request` wraps each request, with `store.commit` (carrying
+All three signals go over the same OTLP pipeline.
+
+**Traces.** `http.request` wraps each request, with `store.commit` (carrying
 `uc.operation`, the version that landed, and how many attempts contention cost),
 `store.catch_up`, and the individual `s3.*` object operations nested beneath it.
-That is enough to see whether a slow request was spent in the object store or
-waiting on a conditional-write retry.
+Enough to see whether a slow request was spent in the object store or waiting on
+a conditional-write retry.
 
-`SIGTERM` drains in-flight requests and flushes pending spans before exit.
+**Logs.** Exported over OTLP rather than scraped from stdout, so each record
+carries the trace and span id of the request that produced it — a log you cannot
+pivot to its trace is not much better than a log on its own. stdout keeps its
+human-readable output for when the collector itself is the problem.
+
+**Metrics.** Deliberately only resident state:
+
+| Metric | Why |
+|---|---|
+| `uc.store.entities` (by `uc.kind`) | The whole catalog is in memory, so entity count decides whether the process fits its limit |
+| `uc.store.version` | Replay position of the in-memory snapshot |
+
+Everything event-shaped — request rate, latency, commit contention — is already
+on the spans, and the collector's spanmetrics connector derives RED metrics from
+those. Emitting both would be double instrumentation that can disagree with
+itself.
+
+`SIGTERM` drains in-flight requests, then flushes all three signals before exit.
 
 ## CLI Options
 

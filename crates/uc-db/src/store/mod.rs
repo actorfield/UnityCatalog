@@ -108,6 +108,19 @@ impl Snapshot {
         self.entities.get(&kind).into_iter().flat_map(|m| m.values())
     }
 
+    /// How many rows are resident, per kind.
+    ///
+    /// Exposed for metrics. This is the number that decides whether the pod
+    /// fits its memory limit -- the whole snapshot is in memory, so entity
+    /// count is the thing to watch, and it is state rather than an event so
+    /// spans cannot report it.
+    pub fn counts(&self) -> Vec<(EntityKind, usize)> {
+        let mut out: Vec<(EntityKind, usize)> =
+            self.entities.iter().map(|(k, m)| (*k, m.len())).collect();
+        out.sort_by_key(|(k, _)| *k);
+        out
+    }
+
     /// Every row of one kind with its id, ordered by id.
     ///
     /// With UUIDv7 ids that is creation order, which is what stands in for the
@@ -286,6 +299,16 @@ impl Store {
 impl StoreInner {
     pub async fn snapshot(&self) -> tokio::sync::RwLockReadGuard<'_, Snapshot> {
         self.state.read().await
+    }
+
+    /// Non-blocking peek, for metric callbacks.
+    ///
+    /// OTel observable-gauge callbacks are synchronous, so they cannot await
+    /// the lock. Returning None under contention is the right trade: a gauge
+    /// that skips one collection interval is far better than one that blocks a
+    /// writer, and the next interval will pick it up.
+    pub fn try_snapshot(&self) -> Option<tokio::sync::RwLockReadGuard<'_, Snapshot>> {
+        self.state.try_read().ok()
     }
 
     /// Pull in every commit written since our current version.

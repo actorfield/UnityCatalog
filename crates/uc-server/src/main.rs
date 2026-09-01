@@ -243,6 +243,8 @@ async fn main() -> anyhow::Result<()> {
         }
     };
 
+    telemetry::register_store_metrics(pool.clone());
+
     // ── 8b. Snapshot refresh ──────────────────────────────────────────────────
     if args.refresh_interval_secs > 0 {
         let refresher = pool.clone();
@@ -290,15 +292,20 @@ async fn main() -> anyhow::Result<()> {
         // hang off. Without a parent span the store timings arrive orphaned and
         // cannot be attributed to a request.
         .layer(
-            tower_http::trace::TraceLayer::new_for_http().make_span_with(
-                |req: &axum::http::Request<_>| {
+            tower_http::trace::TraceLayer::new_for_http()
+                .make_span_with(|req: &axum::http::Request<_>| {
                     tracing::info_span!(
                         "http.request",
                         http.method = %req.method(),
                         http.route = %req.uri().path(),
                     )
-                },
-            ),
+                })
+                // Emitted inside the span above, so the log record carries the
+                // trace and span ids. Without this there was no per-request
+                // logging at all, and nothing to pivot from a trace to a log.
+                .on_response(
+                    tower_http::trace::DefaultOnResponse::new().level(tracing::Level::INFO),
+                ),
         )
         // Registered after the auth layer so it is *not* wrapped by it: an
         // unauthenticated liveness/readiness endpoint that validates the HTTP
