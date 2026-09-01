@@ -4,15 +4,6 @@ version = "0.1.0"
 edition = "2021"
 license.workspace = true
 
-[features]
-default = ["sqlite"]
-# Forwarded to uc-db rather than sqlx: this crate speaks no SQL of its own, so
-# it has no reason to depend on a driver. The features exist only to pass the
-# backend choice through from uc-server.
-sqlite = ["uc-db/sqlite"]
-postgres = ["uc-db/postgres"]
-logstore = ["uc-db/logstore"]
-
 [dependencies]
 uc-errors = { path = "../uc-errors" }
 uc-types = { path = "../uc-types" }

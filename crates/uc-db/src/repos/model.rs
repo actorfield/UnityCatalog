@@ -1,131 +1,197 @@
-use crate::{
-    models::model::{ModelVersionRow, RegisteredModelRow},
-    pool::AnyPool,
-};
+//! Log-structured body for repos::model. Signatures identical to model.rs.
+
+use crate::models::model::{ModelVersionRow, RegisteredModelRow};
+use crate::store::action::{Action, EntityKind};
+use crate::store::Store;
 use uc_errors::{ErrorCode, UcError};
 use uuid::Uuid;
 
+fn model_of(v: &serde_json::Value) -> Result<RegisteredModelRow, UcError> {
+    serde_json::from_value(v.clone())
+        .map_err(|e| UcError::new(ErrorCode::Internal, format!("corrupt model row: {e}")))
+}
+
+fn version_of(v: &serde_json::Value) -> Result<ModelVersionRow, UcError> {
+    serde_json::from_value(v.clone())
+        .map_err(|e| UcError::new(ErrorCode::Internal, format!("corrupt model version: {e}")))
+}
+
+/// UNIQUE(schema_id, name)
+fn nk(schema_id: Uuid, name: &str) -> String {
+    format!("{schema_id}\u{0}{name}")
+}
+
+fn prefix(schema_id: Uuid) -> String {
+    format!("{schema_id}\u{0}")
+}
+
+/// Versions of one model, ordered.
+///
+/// uc_model_versions has only an INDEX on (registered_model_id, version), not a
+/// UNIQUE, so duplicates are representable and there is no natural-key index to
+/// use. Scanning and sorting is also what makes the result deterministic: the
+/// SQL's `fetch_one` returned an arbitrary row among duplicates.
+fn versions_of(
+    snap: &crate::store::Snapshot,
+    model_id: Uuid,
+) -> Result<Vec<ModelVersionRow>, UcError> {
+    let mut rows: Vec<ModelVersionRow> = snap
+        .iter(EntityKind::ModelVersion)
+        .map(version_of)
+        .collect::<Result<Vec<_>, _>>()?;
+    rows.retain(|r| r.registered_model_id == model_id);
+    rows.sort_by_key(|r| (r.version, r.id));
+    Ok(rows)
+}
+
 pub async fn create_model(
-    pool: &AnyPool,
+    store: &Store,
     row: &RegisteredModelRow,
 ) -> Result<RegisteredModelRow, UcError> {
-    sqlx::query_as::<_, RegisteredModelRow>(
-            "INSERT INTO uc_registered_models (id, schema_id, name, owner, created_at, created_by, comment, url)
-             VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING *",
-        )
-        .bind(row.id).bind(row.schema_id).bind(&row.name).bind(&row.owner)
-        .bind(row.created_at).bind(&row.created_by).bind(&row.comment).bind(&row.url)
-        .fetch_one(pool).await.map_err(crate::sqlx_err)
+    let row = row.clone();
+    store
+        .commit("CREATE MODEL", |snap| {
+            // As with functions, the SQL maps no unique violation, so a
+            // duplicate name is a 500 today. Deliberate change to the domain
+            // error.
+            if snap
+                .get_by_natural_key(EntityKind::RegisteredModel, &nk(row.schema_id, &row.name))
+                .is_some()
+            {
+                return Err(UcError::new(
+                    ErrorCode::ResourceAlreadyExists,
+                    format!("Model '{}' already exists", row.name),
+                ));
+            }
+            let body = serde_json::to_value(&row)
+                .map_err(|e| UcError::new(ErrorCode::Internal, e.to_string()))?;
+            Ok((
+                vec![Action::Upsert {
+                    kind: EntityKind::RegisteredModel,
+                    id: row.id,
+                    body,
+                }],
+                row.clone(),
+            ))
+        })
+        .await
 }
 
 pub async fn get_model_by_schema_and_name(
-    pool: &AnyPool,
+    store: &Store,
     schema_id: Uuid,
     name: &str,
 ) -> Result<RegisteredModelRow, UcError> {
-    sqlx::query_as::<_, RegisteredModelRow>(
-        "SELECT * FROM uc_registered_models WHERE schema_id=$1 AND name=$2",
-    )
-    .bind(schema_id)
-    .bind(name)
-    .fetch_one(pool)
-    .await
-    .map_err(|e| match e {
-        sqlx::Error::RowNotFound => {
-            UcError::new(ErrorCode::NotFound, format!("Model '{}' not found", name))
-        }
-        other => crate::sqlx_err(other),
-    })
+    let snap = store.snapshot().await;
+    snap.get_by_natural_key(EntityKind::RegisteredModel, &nk(schema_id, name))
+        .ok_or_else(|| UcError::new(ErrorCode::NotFound, format!("Model '{}' not found", name)))
+        .and_then(model_of)
 }
 
 pub async fn list_models(
-    pool: &AnyPool,
+    store: &Store,
     schema_id: Uuid,
     page_token: Option<&str>,
     max_results: i64,
 ) -> Result<(Vec<RegisteredModelRow>, Option<String>), UcError> {
-    // not compile-time checked
-    let rows: Vec<RegisteredModelRow> = if let Some(t) = page_token {
-        sqlx::query_as::<_, RegisteredModelRow>(
-                "SELECT * FROM uc_registered_models WHERE schema_id=$1 AND name>$2 ORDER BY name LIMIT $3",
-            ).bind(schema_id).bind(t).bind(max_results+1).fetch_all(pool).await.map_err(crate::sqlx_err)?
-    } else {
-        sqlx::query_as::<_, RegisteredModelRow>(
-            "SELECT * FROM uc_registered_models WHERE schema_id=$1 ORDER BY name LIMIT $2",
-        )
-        .bind(schema_id)
-        .bind(max_results + 1)
-        .fetch_all(pool)
-        .await
-        .map_err(crate::sqlx_err)?
-    };
+    let snap = store.snapshot().await;
+    let found = snap.scan_prefix(
+        EntityKind::RegisteredModel,
+        &prefix(schema_id),
+        page_token,
+        crate::pagination::over_fetch(max_results),
+    );
+    let rows: Vec<RegisteredModelRow> =
+        found.into_iter().map(model_of).collect::<Result<_, _>>()?;
     let (rows, next) =
         crate::pagination::page(rows, max_results, |r| r.name.clone());
     Ok((rows, next))
 }
 
 pub async fn create_version(
-    pool: &AnyPool,
+    store: &Store,
     row: &ModelVersionRow,
 ) -> Result<ModelVersionRow, UcError> {
-    sqlx::query_as::<_, ModelVersionRow>(
-            "INSERT INTO uc_model_versions (id, registered_model_id, version, source, run_id, status, owner, created_at, created_by, comment, url)
-             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING *",
-        )
-        .bind(row.id).bind(row.registered_model_id).bind(row.version)
-        .bind(&row.source).bind(&row.run_id).bind(&row.status).bind(&row.owner)
-        .bind(row.created_at).bind(&row.created_by).bind(&row.comment).bind(&row.url)
-        .fetch_one(pool).await.map_err(crate::sqlx_err)
+    let row = row.clone();
+    store
+        .commit("CREATE MODEL VERSION", |_| {
+            let body = serde_json::to_value(&row)
+                .map_err(|e| UcError::new(ErrorCode::Internal, e.to_string()))?;
+            Ok((
+                vec![Action::Upsert {
+                    kind: EntityKind::ModelVersion,
+                    id: row.id,
+                    body,
+                }],
+                row.clone(),
+            ))
+        })
+        .await
 }
 
 pub async fn get_version(
-    pool: &AnyPool,
+    store: &Store,
     model_id: Uuid,
     version: i32,
 ) -> Result<ModelVersionRow, UcError> {
-    sqlx::query_as::<_, ModelVersionRow>(
-        "SELECT * FROM uc_model_versions WHERE registered_model_id=$1 AND version=$2",
-    )
-    .bind(model_id)
-    .bind(version)
-    .fetch_one(pool)
-    .await
-    .map_err(|e| match e {
-        sqlx::Error::RowNotFound => UcError::new(
-            ErrorCode::NotFound,
-            format!("Model version {} not found", version),
-        ),
-        other => crate::sqlx_err(other),
-    })
+    let snap = store.snapshot().await;
+    versions_of(&snap, model_id)?
+        .into_iter()
+        .find(|r| r.version == Some(version))
+        .ok_or_else(|| {
+            UcError::new(
+                ErrorCode::NotFound,
+                format!("Model version {} not found", version),
+            )
+        })
 }
 
-pub async fn delete_model(pool: &AnyPool, id: Uuid) -> Result<(), UcError> {
-    sqlx::query("DELETE FROM uc_model_versions WHERE registered_model_id=$1")
-        .bind(id)
-        .execute(pool)
+/// Drops the model and every version, in one commit.
+///
+/// The SQL issues two DELETEs with nothing joining them and never checks
+/// rows_affected, so a missing model is not an error. Both behaviours preserved.
+pub async fn delete_model(store: &Store, id: Uuid) -> Result<(), UcError> {
+    store
+        .commit("DROP MODEL", |snap| {
+            let mut actions: Vec<Action> = versions_of(snap, id)?
+                .into_iter()
+                .map(|r| Action::Remove {
+                    kind: EntityKind::ModelVersion,
+                    id: r.id,
+                })
+                .collect();
+            if snap.get(EntityKind::RegisteredModel, id).is_some() {
+                actions.push(Action::Remove {
+                    kind: EntityKind::RegisteredModel,
+                    id,
+                });
+            }
+            Ok((actions, ()))
+        })
         .await
-        .map_err(crate::sqlx_err)?;
-    sqlx::query("DELETE FROM uc_registered_models WHERE id=$1")
-        .bind(id)
-        .execute(pool)
-        .await
-        .map_err(crate::sqlx_err)?;
-    Ok(())
 }
 
-pub async fn delete_version(pool: &AnyPool, model_id: Uuid, version: i32) -> Result<(), UcError> {
-    sqlx::query("DELETE FROM uc_model_versions WHERE registered_model_id=$1 AND version=$2")
-        .bind(model_id)
-        .bind(version)
-        .execute(pool)
+/// Deleting an absent version is not an error, matching the SQL's unchecked
+/// rows_affected.
+pub async fn delete_version(store: &Store, model_id: Uuid, version: i32) -> Result<(), UcError> {
+    store
+        .commit("DROP MODEL VERSION", |snap| {
+            let actions: Vec<Action> = versions_of(snap, model_id)?
+                .into_iter()
+                .filter(|r| r.version == Some(version))
+                .map(|r| Action::Remove {
+                    kind: EntityKind::ModelVersion,
+                    id: r.id,
+                })
+                .collect();
+            Ok((actions, ()))
+        })
         .await
-        .map_err(crate::sqlx_err)?;
-    Ok(())
 }
 
-/// Patch a registered model in place. Lifted out of the uc-api handler.
+/// Patch a registered model in place. `None` leaves a field alone.
 pub async fn update_model(
-    pool: &AnyPool,
+    store: &Store,
     id: Uuid,
     new_name: Option<&str>,
     comment: Option<&str>,
@@ -133,73 +199,115 @@ pub async fn update_model(
     updated_at: i64,
     updated_by: Option<&str>,
 ) -> Result<(), UcError> {
-    sqlx::query(
-        "UPDATE uc_registered_models SET name=COALESCE($1,name), comment=COALESCE($2,comment), \
-         owner=COALESCE($3,owner), updated_at=$4, updated_by=$5 WHERE id=$6",
-    )
-    .bind(new_name)
-    .bind(comment)
-    .bind(owner)
-    .bind(updated_at)
-    .bind(updated_by)
-    .bind(id)
-    .execute(pool)
-    .await
-    .map_err(crate::sqlx_err)?;
-    Ok(())
-}
+    store
+        .commit("UPDATE MODEL", |snap| {
+            // Zero rows matched is success in the SQL; preserved.
+            let Some(current) = snap.get(EntityKind::RegisteredModel, id) else {
+                return Ok((vec![], ()));
+            };
+            let mut row = model_of(current)?;
 
-pub async fn set_max_version(pool: &AnyPool, id: Uuid, next: i32) -> Result<(), UcError> {
-    sqlx::query("UPDATE uc_registered_models SET max_version_number=$1 WHERE id=$2")
-        .bind(next)
-        .bind(id)
-        .execute(pool)
+            if let Some(target) = new_name {
+                if target != row.name
+                    && snap
+                        .get_by_natural_key(EntityKind::RegisteredModel, &nk(row.schema_id, target))
+                        .is_some()
+                {
+                    return Err(UcError::new(
+                        ErrorCode::ResourceAlreadyExists,
+                        format!("Model '{}' already exists", target),
+                    ));
+                }
+                row.name = target.to_string();
+            }
+            if let Some(c) = comment {
+                row.comment = Some(c.to_string());
+            }
+            if let Some(o) = owner {
+                row.owner = Some(o.to_string());
+            }
+            row.updated_at = Some(updated_at);
+            row.updated_by = updated_by.map(str::to_owned);
+
+            let body = serde_json::to_value(&row)
+                .map_err(|e| UcError::new(ErrorCode::Internal, e.to_string()))?;
+            Ok((
+                vec![Action::Upsert { kind: EntityKind::RegisteredModel, id, body }],
+                (),
+            ))
+        })
         .await
-        .map_err(crate::sqlx_err)?;
-    Ok(())
 }
 
-/// All versions of a model, `ORDER BY version`.
+pub async fn set_max_version(store: &Store, id: Uuid, next: i32) -> Result<(), UcError> {
+    store
+        .commit("SET MAX VERSION", |snap| {
+            let Some(current) = snap.get(EntityKind::RegisteredModel, id) else {
+                return Ok((vec![], ()));
+            };
+            let mut row = model_of(current)?;
+            row.max_version_number = Some(next);
+            let body = serde_json::to_value(&row)
+                .map_err(|e| UcError::new(ErrorCode::Internal, e.to_string()))?;
+            Ok((
+                vec![Action::Upsert { kind: EntityKind::RegisteredModel, id, body }],
+                (),
+            ))
+        })
+        .await
+}
+
+/// All versions of a model, ordered by version.
 pub async fn list_versions(
-    pool: &AnyPool,
+    store: &Store,
     model_id: Uuid,
 ) -> Result<Vec<ModelVersionRow>, UcError> {
-    sqlx::query_as::<_, ModelVersionRow>(
-        "SELECT * FROM uc_model_versions WHERE registered_model_id=$1 ORDER BY version",
-    )
-    .bind(model_id)
-    .fetch_all(pool)
-    .await
-    .map_err(crate::sqlx_err)
+    let snap = store.snapshot().await;
+    versions_of(&snap, model_id)
 }
 
 pub async fn update_version(
-    pool: &AnyPool,
+    store: &Store,
     id: Uuid,
     comment: Option<&str>,
     updated_at: i64,
     updated_by: Option<&str>,
 ) -> Result<(), UcError> {
-    sqlx::query(
-        "UPDATE uc_model_versions SET comment=COALESCE($1,comment), updated_at=$2, \
-         updated_by=$3 WHERE id=$4",
-    )
-    .bind(comment)
-    .bind(updated_at)
-    .bind(updated_by)
-    .bind(id)
-    .execute(pool)
-    .await
-    .map_err(crate::sqlx_err)?;
-    Ok(())
+    store
+        .commit("UPDATE MODEL VERSION", |snap| {
+            let Some(current) = snap.get(EntityKind::ModelVersion, id) else {
+                return Ok((vec![], ()));
+            };
+            let mut row = version_of(current)?;
+            if let Some(c) = comment {
+                row.comment = Some(c.to_string());
+            }
+            row.updated_at = Some(updated_at);
+            row.updated_by = updated_by.map(str::to_owned);
+            let body = serde_json::to_value(&row)
+                .map_err(|e| UcError::new(ErrorCode::Internal, e.to_string()))?;
+            Ok((
+                vec![Action::Upsert { kind: EntityKind::ModelVersion, id, body }],
+                (),
+            ))
+        })
+        .await
 }
 
-pub async fn set_version_status(pool: &AnyPool, id: Uuid, status: &str) -> Result<(), UcError> {
-    sqlx::query("UPDATE uc_model_versions SET status=$1 WHERE id=$2")
-        .bind(status)
-        .bind(id)
-        .execute(pool)
+pub async fn set_version_status(store: &Store, id: Uuid, status: &str) -> Result<(), UcError> {
+    store
+        .commit("SET MODEL VERSION STATUS", |snap| {
+            let Some(current) = snap.get(EntityKind::ModelVersion, id) else {
+                return Ok((vec![], ()));
+            };
+            let mut row = version_of(current)?;
+            row.status = Some(status.to_string());
+            let body = serde_json::to_value(&row)
+                .map_err(|e| UcError::new(ErrorCode::Internal, e.to_string()))?;
+            Ok((
+                vec![Action::Upsert { kind: EntityKind::ModelVersion, id, body }],
+                (),
+            ))
+        })
         .await
-        .map_err(crate::sqlx_err)?;
-    Ok(())
 }

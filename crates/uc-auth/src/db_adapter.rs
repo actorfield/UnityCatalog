@@ -201,16 +201,7 @@ mod tests {
     use uc_types::Privilege;
     use uuid::Uuid;
 
-    /// A fresh, empty store. Backend chosen by feature, so the adapter tests
-    /// below — which are about policy surviving a restart — run against both.
-    #[cfg(not(feature = "logstore"))]
-    async fn in_memory_sqlite() -> AnyPool {
-        let pool = AnyPool::connect("sqlite::memory:").await.unwrap();
-        uc_db::pool::run_migrations(&pool).await.unwrap();
-        pool
-    }
-
-    #[cfg(feature = "logstore")]
+    /// A fresh, empty store for each test.
     async fn in_memory_sqlite() -> AnyPool {
         use std::sync::Arc;
         AnyPool::open(Arc::new(uc_db::store::memory::MemoryLog::new()))
@@ -218,9 +209,6 @@ mod tests {
             .unwrap()
     }
 
-    /// Grant a privilege, simulate restart by creating a fresh authorizer
-    /// backed by the same DB, then verify the privilege is still enforced.
-    /// This is the regression test for the load_policy sec/"" bug.
     #[tokio::test]
     async fn policies_survive_restart() {
         let pool = in_memory_sqlite().await;

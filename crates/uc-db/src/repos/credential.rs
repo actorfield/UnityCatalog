@@ -1,94 +1,100 @@
-use crate::{models::credential::CredentialRow, pool::AnyPool};
+//! Log-structured body for repos::credential. Signatures identical to credential.rs.
+
+use crate::models::credential::CredentialRow;
+use crate::store::action::{Action, EntityKind};
+use crate::store::Store;
 use uc_errors::{ErrorCode, UcError};
 use uuid::Uuid;
 
-pub async fn create(pool: &AnyPool, row: &CredentialRow) -> Result<CredentialRow, UcError> {
-    sqlx::query_as::<_, CredentialRow>(
-            "INSERT INTO uc_credentials (id, name, credential_type, credential, purpose, comment, owner, created_at, created_by)
-             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING *",
-        )
-        .bind(row.id).bind(&row.name).bind(&row.credential_type).bind(&row.credential)
-        .bind(&row.purpose).bind(&row.comment).bind(&row.owner)
-        .bind(row.created_at).bind(&row.created_by)
-        .fetch_one(pool).await
-        .map_err(|e| match e {
-            sqlx::Error::Database(ref db) if db.is_unique_violation() =>
-                UcError::new(ErrorCode::StorageCredentialAlreadyExists, format!("Credential '{}' already exists", row.name)),
-            other => crate::sqlx_err(other),
-        })
+fn row_of(v: &serde_json::Value) -> Result<CredentialRow, UcError> {
+    serde_json::from_value(v.clone())
+        .map_err(|e| UcError::new(ErrorCode::Internal, format!("corrupt credential row: {e}")))
 }
 
-pub async fn get_by_name(pool: &AnyPool, name: &str) -> Result<CredentialRow, UcError> {
-    sqlx::query_as::<_, CredentialRow>("SELECT * FROM uc_credentials WHERE name=$1")
-        .bind(name)
-        .fetch_one(pool)
+pub async fn create(store: &Store, row: &CredentialRow) -> Result<CredentialRow, UcError> {
+    let row = row.clone();
+    store
+        .commit("CREATE CREDENTIAL", |snap| {
+            if snap
+                .get_by_natural_key(EntityKind::Credential, &row.name)
+                .is_some()
+            {
+                return Err(UcError::new(
+                    ErrorCode::StorageCredentialAlreadyExists,
+                    format!("Credential '{}' already exists", row.name),
+                ));
+            }
+            let body = serde_json::to_value(&row)
+                .map_err(|e| UcError::new(ErrorCode::Internal, e.to_string()))?;
+            Ok((
+                vec![Action::Upsert { kind: EntityKind::Credential, id: row.id, body }],
+                row.clone(),
+            ))
+        })
         .await
-        .map_err(|e| match e {
-            sqlx::Error::RowNotFound => UcError::new(
+}
+
+pub async fn get_by_name(store: &Store, name: &str) -> Result<CredentialRow, UcError> {
+    let snap = store.snapshot().await;
+    snap.get_by_natural_key(EntityKind::Credential, name)
+        .ok_or_else(|| {
+            UcError::new(
                 ErrorCode::NotFound,
                 format!("Credential '{}' not found", name),
-            ),
-            other => crate::sqlx_err(other),
+            )
         })
+        .and_then(row_of)
 }
 
-pub async fn get_by_id(pool: &AnyPool, id: Uuid) -> Result<CredentialRow, UcError> {
-    sqlx::query_as::<_, CredentialRow>("SELECT * FROM uc_credentials WHERE id=$1")
-        .bind(id)
-        .fetch_one(pool)
-        .await
-        .map_err(crate::sqlx_err)
+pub async fn get_by_id(store: &Store, id: Uuid) -> Result<CredentialRow, UcError> {
+    let snap = store.snapshot().await;
+    snap.get(EntityKind::Credential, id)
+        .ok_or_else(|| {
+            UcError::new(
+                ErrorCode::NotFound,
+                format!("Credential '{}' not found", id),
+            )
+        })
+        .and_then(row_of)
 }
 
 pub async fn list(
-    pool: &AnyPool,
+    store: &Store,
     page_token: Option<&str>,
     max_results: i64,
 ) -> Result<(Vec<CredentialRow>, Option<String>), UcError> {
-    // not compile-time checked
-    let rows: Vec<CredentialRow> = if let Some(t) = page_token {
-        sqlx::query_as::<_, CredentialRow>(
-            "SELECT * FROM uc_credentials WHERE name>$1 ORDER BY name LIMIT $2",
-        )
-        .bind(t)
-        .bind(max_results + 1)
-        .fetch_all(pool)
-        .await
-        .map_err(crate::sqlx_err)?
-    } else {
-        sqlx::query_as::<_, CredentialRow>("SELECT * FROM uc_credentials ORDER BY name LIMIT $1")
-            .bind(max_results + 1)
-            .fetch_all(pool)
-            .await
-            .map_err(crate::sqlx_err)?
-    };
+    let snap = store.snapshot().await;
+    let found = snap.scan(EntityKind::Credential, page_token, crate::pagination::over_fetch(max_results));
+    let rows: Vec<CredentialRow> = found.into_iter().map(row_of).collect::<Result<_, _>>()?;
     let (rows, next) =
         crate::pagination::page(rows, max_results, |r| r.name.clone());
     Ok((rows, next))
 }
 
-pub async fn delete(pool: &AnyPool, name: &str) -> Result<(), UcError> {
-    let r = sqlx::query("DELETE FROM uc_credentials WHERE name=$1")
-        .bind(name)
-        .execute(pool)
+pub async fn delete(store: &Store, name: &str) -> Result<(), UcError> {
+    store
+        .commit("DROP CREDENTIAL", |snap| {
+            let current = snap
+                .get_by_natural_key(EntityKind::Credential, name)
+                .ok_or_else(|| {
+                    UcError::new(
+                        ErrorCode::NotFound,
+                        format!("Credential '{}' not found", name),
+                    )
+                })?;
+            let row = row_of(current)?;
+            Ok((
+                vec![Action::Remove { kind: EntityKind::Credential, id: row.id }],
+                (),
+            ))
+        })
         .await
-        .map_err(crate::sqlx_err)?;
-    if r.rows_affected() == 0 {
-        return Err(UcError::new(
-            ErrorCode::NotFound,
-            format!("Credential '{}' not found", name),
-        ));
-    }
-    Ok(())
 }
 
-/// Patch a credential in place.
-///
-/// Lifted out of the update handler in uc-api, which issued this UPDATE
-/// inline. `None` leaves a field alone, matching COALESCE.
+/// Patch a credential in place. `None` leaves a field alone, matching COALESCE.
 #[allow(clippy::too_many_arguments)]
 pub async fn update(
-    pool: &AnyPool,
+    store: &Store,
     id: Uuid,
     new_name: Option<&str>,
     comment: Option<&str>,
@@ -97,20 +103,46 @@ pub async fn update(
     updated_at: i64,
     updated_by: Option<&str>,
 ) -> Result<(), UcError> {
-    sqlx::query(
-        "UPDATE uc_credentials SET name=COALESCE($1,name), comment=COALESCE($2,comment), \
-         owner=COALESCE($3,owner), credential=COALESCE($4,credential), updated_at=$5, \
-         updated_by=$6 WHERE id=$7",
-    )
-    .bind(new_name)
-    .bind(comment)
-    .bind(owner)
-    .bind(credential)
-    .bind(updated_at)
-    .bind(updated_by)
-    .bind(id)
-    .execute(pool)
-    .await
-    .map_err(crate::sqlx_err)?;
-    Ok(())
+    store
+        .commit("UPDATE CREDENTIAL", |snap| {
+            // The SQL UPDATE matches zero rows and reports success for a
+            // missing id; preserved.
+            let Some(current) = snap.get(EntityKind::Credential, id) else {
+                return Ok((vec![], ()));
+            };
+            let mut row = row_of(current)?;
+
+            if let Some(target) = new_name {
+                if target != row.name
+                    && snap
+                        .get_by_natural_key(EntityKind::Credential, target)
+                        .is_some()
+                {
+                    return Err(UcError::new(
+                        ErrorCode::StorageCredentialAlreadyExists,
+                        format!("Credential '{}' already exists", target),
+                    ));
+                }
+                row.name = target.to_string();
+            }
+            if let Some(c) = comment {
+                row.comment = Some(c.to_string());
+            }
+            if let Some(o) = owner {
+                row.owner = Some(o.to_string());
+            }
+            if let Some(c) = credential {
+                row.credential = c.to_string();
+            }
+            row.updated_at = Some(updated_at);
+            row.updated_by = updated_by.map(str::to_owned);
+
+            let body = serde_json::to_value(&row)
+                .map_err(|e| UcError::new(ErrorCode::Internal, e.to_string()))?;
+            Ok((
+                vec![Action::Upsert { kind: EntityKind::Credential, id, body }],
+                (),
+            ))
+        })
+        .await
 }

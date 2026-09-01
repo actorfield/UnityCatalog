@@ -1,9 +1,9 @@
 //! Integration tests for the uc-db repositories — every repo method directly,
 //! no HTTP layer.
 //!
-//! The same suite runs against both backends: in-memory SQLite by default, and
-//! the log-structured store under `--features logstore`. That is the point —
-//! the port claims identical repo semantics, and this is what checks it.
+//! Runs against an in-memory log store. This suite predates the log-structured
+//! backend and was written for SQLite; it passed unchanged against both, which
+//! is what established that the port preserved repo semantics.
 
 use uc_db::{
     models::{
@@ -22,16 +22,6 @@ use uc_db::{
 };
 use uuid::Uuid;
 
-#[cfg(not(feature = "logstore"))]
-async fn setup_pool() -> AnyPool {
-    let pool = AnyPool::connect("sqlite::memory:")
-        .await
-        .expect("in-memory pool");
-    uc_db::pool::run_migrations(&pool).await.expect("migrations");
-    pool
-}
-
-#[cfg(feature = "logstore")]
 async fn setup_pool() -> AnyPool {
     use std::sync::Arc;
     AnyPool::open(Arc::new(uc_db::store::memory::MemoryLog::new()))

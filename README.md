@@ -11,14 +11,11 @@ unitycatalog-rs/
 │   ├── uc-errors/       ErrorCode enum, UcError, UC/Delta wire error shapes
 │   ├── uc-types/        Privilege, UriScheme, TokenType, SecurableType
 │   ├── uc-openapi/      Serde types from all.yaml + control.yaml + delta.yaml
-│   ├── uc-db/           sqlx row structs + repositories (SQLite / Postgres)
+│   ├── uc-db/           row structs, repositories, log-structured store
 │   ├── uc-auth/         JWT (RS512) + Casbin RBAC
 │   ├── uc-credentials/  AWS/Azure/GCP credential vending
 │   ├── uc-api/          Axum routers — catalog, control, delta APIs
 │   └── uc-server/       Binary: startup wiring, CLI args, serve
-├── migrations/
-│   ├── sqlite/          DDL for SQLite (default)
-│   └── postgres/        DDL for PostgreSQL
 ├── tests/python/        Pytest integration tests
 ├── scripts/
 │   └── seed.py          Seeds sample data (unity catalog + default schema)
@@ -29,7 +26,7 @@ unitycatalog-rs/
 | Concern | Crate |
 |---|---|
 | HTTP server | `axum 0.7` + `tower-http` |
-| Storage | `sqlx 0.7` (SQLite default, Postgres via feature flag) or a log-structured object store (`logstore`) |
+| Storage | log-structured object store (S3 / MinIO), materialised in memory |
 | Auth | `jsonwebtoken 9` (RS512 JWT) + `casbin` (RBAC) |
 | Serialization | `serde` + `serde_json` |
 | Cloud credentials | `aws-sdk-sts` (always compiled in; vending toggled at runtime via `--enable-aws-credentials`, default on) |
@@ -42,42 +39,19 @@ unitycatalog-rs/
 cargo build
 ```
 
-For Postgres instead of SQLite:
-
-```bash
-cargo build --no-default-features --features postgres
-```
-
-For the log-structured object store, with no database at all:
-
-```bash
-cargo build --no-default-features --features logstore
-```
-
-`--no-default-features` matters: it drops `sqlx` and its driver entirely,
-taking uc-db from 204 transitive dependencies to 84. Building with
-`--features logstore` alone still works — the log store takes precedence — but
-leaves the unused SQL driver linked in.
+There is one backend and no feature flags to choose it.
 
 ### 2. Run the server
 
+Key material comes from a secret store, so generate some once:
+
 ```bash
-./target/debug/uc-server \
-  --port 8080 \
-  --config-dir ./etc/conf \
-  --database-url "sqlite:./etc/db/uc.db?mode=rwc" \
-  --no-auth
+./target/debug/uc-server --generate-key-file ./etc/conf/keys.json
 ```
 
-RSA keys are generated automatically on first start under `--config-dir`.
-
-With `--features logstore` there is no database, no migrations and no local
-state — metadata lives in an object store and every replica replays it at
-startup:
+Then point it at an object store (`AWS_ENDPOINT_URL` redirects to MinIO):
 
 ```bash
-./target/debug/uc-server --generate-key-file ./etc/conf/keys.json   # once
-
 AWS_ENDPOINT_URL=http://localhost:9000 \
 ./target/debug/uc-server \
   --port 8080 \
@@ -88,10 +62,9 @@ AWS_ENDPOINT_URL=http://localhost:9000 \
 
 Key material is never written to the object store, and there is no option to do
 so. Credentials vended by this server are bucket-scoped, so a private key in
-that bucket would be readable by anything holding one. Supply it from a secret
-store — `--key-file` is the path a mounted Kubernetes Secret arrives at. A
-missing key file is a startup error, never a cue to generate: silently minting a
-new keypair invalidates every token already issued.
+that bucket would be readable by anything holding one. A missing key file is a
+startup error, never a cue to generate: silently minting a new keypair
+invalidates every token already issued.
 
 ### 3. Seed sample data
 
@@ -154,22 +127,15 @@ Iceberg REST catalog (`/api/2.1/unity-catalog/iceberg/*`).
 
 RBAC uses [Casbin](https://casbin.org/) with a hierarchical model: Metastore → Catalog → Schema → Table/Volume/Function/Model.
 
-## Storage backends
+## Storage
 
-Chosen at compile time. The repo layer has one implementation per backend behind
-identical signatures, and the same integration suite runs against each.
+Metadata is an append-only JSONL commit log with periodic checkpoints, laid out
+like Delta's `_delta_log`, materialised in memory at startup. There is no
+database, no driver, no migrations and no local state.
 
-| Feature | Metadata lives in | Notes |
-|---|---|---|
-| `sqlite` (default) | a local SQLite file | Zero setup. Migrations run on startup from `migrations/sqlite/`. |
-| `postgres` | PostgreSQL | Migrations from `migrations/postgres/`. |
-| `logstore` | an S3-compatible object store | No database, no migrations, no local state. |
-
-`logstore` keeps metadata as an append-only JSONL commit log with periodic
-checkpoints, laid out like Delta's `_delta_log`, and materialises it in memory
-at startup. Concurrency rests on conditional writes (`If-None-Match: *`), so it
-needs S3 (August 2024 or later) or MinIO. Delta commits are partitioned into a
-log per table, matching Delta's own layout.
+Concurrency rests on conditional writes (`If-None-Match: *`), so it needs S3
+(August 2024 or later) or MinIO. Delta commits are partitioned into a log per
+table, matching Delta's own layout.
 
 Multiple replicas may share one log. Writes are safe — a stale replica loses the
 conditional write, replays and retries — but reads are only eventually
@@ -182,31 +148,19 @@ design and its limits.
 
 ```
 --port                    Port to listen on (default: 8080)
---config-dir              Config directory — RSA keys (sqlite/postgres only) and
-                          the dev admin token (default: ./etc/conf)
---database-url            SQLite or Postgres connection string
---no-auth                 Disable JWT/RBAC enforcement
-```
-
-Key material, on every build:
-
-```
---key-file PATH           Load JWT signing key material from PATH, the path a
-                          mounted secret arrives at. Required under `logstore`;
-                          optional elsewhere, where keys otherwise generate into
-                          --config-dir. A missing file is an error, never a cue
-                          to generate.
---generate-key-file PATH  Write fresh key material to PATH and exit. Refuses to
-                          overwrite an existing file.
-```
-
-Only with `--features logstore`:
-
-```
 --storage-root            Object-store root, as s3://bucket/prefix
+--key-file PATH           JWT signing key material, the path a mounted secret
+                          arrives at. Required. A missing file is an error,
+                          never a cue to generate.
+--generate-key-file PATH  Write fresh key material to PATH and exit, for loading
+                          into a secret store. Refuses to overwrite an existing
+                          file.
+--config-dir              Config directory — holds the dev admin token
+                          (default: ./etc/conf)
 --refresh-interval-secs   Refresh the in-memory snapshot from the log every N
                           seconds (default 0, off). Only useful with more than
                           one replica on the same log.
+--no-auth                 Disable JWT/RBAC enforcement
 ```
 
 ## Development
@@ -216,9 +170,7 @@ cargo check                                  # fast type check
 cargo test --lib                             # unit tests across the workspace
 cargo build                                  # full build
 
-# The repo suite runs against both backends and must pass on each.
-cargo test -p uc-db --test test_repos
-cargo test -p uc-db --test test_repos --features logstore
+cargo test -p uc-db --test test_repos          # repo layer, end to end
 ```
 
 ## License

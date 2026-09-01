@@ -1,110 +1,161 @@
-//! Casbin policy storage, SQL body.
-//!
-//! Lifted out of uc-auth's adapter, which spoke sqlx directly. The adapter now
-//! calls these, so it works against either backend.
+//! Casbin policy storage, log-structured body. Signatures identical to casbin.rs.
 
 use crate::models::casbin::CasbinRule;
-use crate::pool::AnyPool;
-use crate::IntoUcResult;
-use uc_errors::UcError;
+use crate::store::action::{Action, EntityKind};
+use crate::store::Store;
+use uc_errors::{ErrorCode, UcError};
+use uuid::Uuid;
 
-/// All rules in insertion order (`ORDER BY id`). Casbin does not require an
-/// order, but a stable one keeps `save_policy` round-trips reproducible.
-pub async fn load_all(pool: &AnyPool) -> Result<Vec<CasbinRule>, UcError> {
-    sqlx::query_as::<_, CasbinRule>(
-        "SELECT ptype, v0, v1, v2, v3, v4, v5 FROM casbin_rule ORDER BY id",
-    )
-    .fetch_all(pool)
-    .await
-    .uc_err()
+fn rule_of(v: &serde_json::Value) -> Result<CasbinRule, UcError> {
+    serde_json::from_value(v.clone())
+        .map_err(|e| UcError::new(ErrorCode::Internal, format!("corrupt casbin rule: {e}")))
 }
 
-/// Returns false when the rule was already present.
-pub async fn insert(pool: &AnyPool, rule: &CasbinRule) -> Result<bool, UcError> {
-    let v = rule.values();
-    let result = sqlx::query(
-        "INSERT OR IGNORE INTO casbin_rule (ptype, v0, v1, v2, v3, v4, v5) \
-         VALUES ($1,$2,$3,$4,$5,$6,$7)",
-    )
-    .bind(&rule.ptype)
-    .bind(v[0])
-    .bind(v[1])
-    .bind(v[2])
-    .bind(v[3])
-    .bind(v[4])
-    .bind(v[5])
-    .execute(pool)
-    .await
-    .uc_err()?;
-    Ok(result.rows_affected() > 0)
+fn body_of(rule: &CasbinRule) -> Result<serde_json::Value, UcError> {
+    serde_json::to_value(rule).map_err(|e| UcError::new(ErrorCode::Internal, e.to_string()))
+}
+
+/// The UNIQUE INDEX on (ptype, v0..v5), rendered as the store's natural key.
+fn nk(rule: &CasbinRule) -> String {
+    [
+        rule.ptype.as_str(),
+        rule.v0.as_str(),
+        rule.v1.as_str(),
+        rule.v2.as_str(),
+        rule.v3.as_str(),
+        rule.v4.as_str(),
+        rule.v5.as_str(),
+    ]
+    .join("\u{0}")
+}
+
+/// All rules in insertion order.
+///
+/// The SQL orders by an AUTOINCREMENT id; here ids are UUIDv7, so ordering by
+/// id is ordering by creation time. Same result, and only because the ids are
+/// time-ordered — this would return arbitrary order under v4.
+pub async fn load_all(store: &Store) -> Result<Vec<CasbinRule>, UcError> {
+    let snap = store.snapshot().await;
+    snap.iter_by_id(EntityKind::CasbinRule)
+        .into_iter()
+        .map(|(_, v)| rule_of(v))
+        .collect()
+}
+
+/// Returns false when the rule was already present, matching INSERT OR IGNORE.
+pub async fn insert(store: &Store, rule: &CasbinRule) -> Result<bool, UcError> {
+    let rule = rule.clone();
+    let key = nk(&rule);
+    store
+        .commit("ADD POLICY", |snap| {
+            if snap
+                .get_by_natural_key(EntityKind::CasbinRule, &key)
+                .is_some()
+            {
+                // No actions: an empty commit is skipped, so a duplicate add
+                // does not append to the log.
+                return Ok((vec![], false));
+            }
+            Ok((
+                vec![Action::Upsert {
+                    kind: EntityKind::CasbinRule,
+                    id: Uuid::now_v7(),
+                    body: body_of(&rule)?,
+                }],
+                true,
+            ))
+        })
+        .await
 }
 
 /// Returns false when no such rule existed.
-pub async fn delete(pool: &AnyPool, rule: &CasbinRule) -> Result<bool, UcError> {
-    let v = rule.values();
-    let result = sqlx::query(
-        "DELETE FROM casbin_rule WHERE ptype=$1 AND v0=$2 AND v1=$3 AND v2=$4 \
-         AND v3=$5 AND v4=$6 AND v5=$7",
-    )
-    .bind(&rule.ptype)
-    .bind(v[0])
-    .bind(v[1])
-    .bind(v[2])
-    .bind(v[3])
-    .bind(v[4])
-    .bind(v[5])
-    .execute(pool)
-    .await
-    .uc_err()?;
-    Ok(result.rows_affected() > 0)
+pub async fn delete(store: &Store, rule: &CasbinRule) -> Result<bool, UcError> {
+    let key = nk(rule);
+    store
+        .commit("REMOVE POLICY", |snap| {
+            let Some(id) = snap.id_by_natural_key(EntityKind::CasbinRule, &key) else {
+                return Ok((vec![], false));
+            };
+            Ok((
+                vec![Action::Remove {
+                    kind: EntityKind::CasbinRule,
+                    id,
+                }],
+                true,
+            ))
+        })
+        .await
 }
 
-/// True if any rule was removed.
-pub async fn delete_many(pool: &AnyPool, rules: &[CasbinRule]) -> Result<bool, UcError> {
-    let mut any = false;
-    for rule in rules {
-        if delete(pool, rule).await? {
-            any = true;
-        }
-    }
-    Ok(any)
+/// True if any rule was removed. One commit for the whole batch, so a filtered
+/// removal is all-or-nothing rather than a sequence of independent deletes.
+pub async fn delete_many(store: &Store, rules: &[CasbinRule]) -> Result<bool, UcError> {
+    let keys: Vec<String> = rules.iter().map(nk).collect();
+    store
+        .commit("REMOVE POLICIES", |snap| {
+            let actions: Vec<Action> = keys
+                .iter()
+                .filter_map(|k| snap.id_by_natural_key(EntityKind::CasbinRule, k))
+                .map(|id| Action::Remove {
+                    kind: EntityKind::CasbinRule,
+                    id,
+                })
+                .collect();
+            let any = !actions.is_empty();
+            Ok((actions, any))
+        })
+        .await
 }
 
 /// Replace the entire policy set.
 ///
-/// Wrapped in a transaction to keep the window where the table is empty as
-/// short as possible — an authorizer reading mid-replace would otherwise see no
-/// policy and deny everything.
-pub async fn replace_all(pool: &AnyPool, rules: &[CasbinRule]) -> Result<(), UcError> {
-    let mut tx = pool.begin().await.uc_err()?;
-    sqlx::query("DELETE FROM casbin_rule")
-        .execute(&mut *tx)
+/// The SQL wraps delete-then-insert in a transaction, with a comment about
+/// minimising the window where the table is empty — an authorizer reading
+/// mid-replace would see no policy and deny everything. As a single commit
+/// that window is not merely short, it does not exist: no reader can observe a
+/// state between the two.
+pub async fn replace_all(store: &Store, rules: &[CasbinRule]) -> Result<(), UcError> {
+    let rules = rules.to_vec();
+    store
+        .commit("SAVE POLICY", |snap| {
+            let mut actions: Vec<Action> = snap
+                .iter_by_id(EntityKind::CasbinRule)
+                .into_iter()
+                .map(|(id, _)| Action::Remove {
+                    kind: EntityKind::CasbinRule,
+                    id,
+                })
+                .collect();
+            // Deduplicate on the way in, matching INSERT OR IGNORE: casbin can
+            // hand back the same rule under more than one section.
+            let mut seen = std::collections::HashSet::new();
+            for rule in &rules {
+                if !seen.insert(nk(rule)) {
+                    continue;
+                }
+                actions.push(Action::Upsert {
+                    kind: EntityKind::CasbinRule,
+                    id: Uuid::now_v7(),
+                    body: body_of(rule)?,
+                });
+            }
+            Ok((actions, ()))
+        })
         .await
-        .uc_err()?;
-    for rule in rules {
-        let v = rule.values();
-        sqlx::query(
-            "INSERT OR IGNORE INTO casbin_rule (ptype, v0, v1, v2, v3, v4, v5) \
-             VALUES ($1,$2,$3,$4,$5,$6,$7)",
-        )
-        .bind(&rule.ptype)
-        .bind(v[0])
-        .bind(v[1])
-        .bind(v[2])
-        .bind(v[3])
-        .bind(v[4])
-        .bind(v[5])
-        .execute(&mut *tx)
-        .await
-        .uc_err()?;
-    }
-    tx.commit().await.uc_err()
 }
 
-pub async fn clear(pool: &AnyPool) -> Result<(), UcError> {
-    sqlx::query("DELETE FROM casbin_rule")
-        .execute(pool)
+pub async fn clear(store: &Store) -> Result<(), UcError> {
+    store
+        .commit("CLEAR POLICY", |snap| {
+            let actions: Vec<Action> = snap
+                .iter_by_id(EntityKind::CasbinRule)
+                .into_iter()
+                .map(|(id, _)| Action::Remove {
+                    kind: EntityKind::CasbinRule,
+                    id,
+                })
+                .collect();
+            Ok((actions, ()))
+        })
         .await
-        .uc_err()?;
-    Ok(())
 }

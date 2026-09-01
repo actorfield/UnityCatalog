@@ -1,78 +1,81 @@
-use crate::{models::delta::DeltaCommitRow, pool::AnyPool};
-use uc_errors::UcError;
+//! Log-structured body for repos::delta. Signatures identical to delta.rs.
+//!
+//! This is the module partitioning was for. Each row is stored as the commit
+//! file itself, in the table's own log, at the version it claims — so
+//! UNIQUE(table_id, commit_version) is no longer a constraint the store has to
+//! enforce, it is the object key. `insert` is a single conditional PUT: no
+//! snapshot read, no commit loop, no retry, and no serialisation against
+//! commits to any other table.
+
+use crate::models::delta::DeltaCommitRow;
+use crate::store::Store;
+use uc_errors::{ErrorCode, UcError};
 use uuid::Uuid;
 
-pub async fn insert(pool: &AnyPool, row: &DeltaCommitRow) -> Result<DeltaCommitRow, UcError> {
-    sqlx::query_as::<_, DeltaCommitRow>(
-            "INSERT INTO uc_delta_commits (id, table_id, commit_version, commit_filename, commit_filesize,
-              commit_file_modification_timestamp, commit_timestamp, is_backfilled_latest_commit)
-             VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING *",
-        )
-        .bind(row.id).bind(row.table_id).bind(row.commit_version).bind(&row.commit_filename)
-        .bind(row.commit_filesize).bind(row.commit_file_modification_timestamp)
-        .bind(row.commit_timestamp).bind(row.is_backfilled_latest_commit)
-        .fetch_one(pool)
-        .await
-        .map_err(|e| match e {
-            // Unique constraint on (table_id, commit_version) → 409 CommitVersionConflict, not 500
-            sqlx::Error::Database(ref db) if db.is_unique_violation() => {
-                uc_errors::UcError::new(
-                    uc_errors::ErrorCode::CommitVersionConflict,
-                    format!("Commit version {} already exists for this table", row.commit_version),
-                )
-            }
-            other => crate::sqlx_err(other),
-        })
+fn decode(bytes: &[u8]) -> Result<DeltaCommitRow, UcError> {
+    serde_json::from_slice(bytes)
+        .map_err(|e| UcError::new(ErrorCode::Internal, format!("corrupt delta commit: {e}")))
+}
+
+pub async fn insert(store: &Store, row: &DeltaCommitRow) -> Result<DeltaCommitRow, UcError> {
+    let body = serde_json::to_vec(row)
+        .map_err(|e| UcError::new(ErrorCode::Internal, e.to_string()))?;
+    // AlreadyExists is mapped to CommitVersionConflict inside DeltaLog::append,
+    // preserving the 409 the unique-violation branch produced.
+    store
+        .delta
+        .append(row.table_id, row.commit_version, body)
+        .await?;
+    Ok(row.clone())
 }
 
 pub async fn list_for_table(
-    pool: &AnyPool,
+    store: &Store,
     table_id: Uuid,
     starting_version: Option<i64>,
     ending_version: Option<i64>,
 ) -> Result<Vec<DeltaCommitRow>, UcError> {
-    // not compile-time checked — dynamic range filter
-    let rows: Vec<DeltaCommitRow> = sqlx::query_as::<_, DeltaCommitRow>(
-        "SELECT * FROM uc_delta_commits
-             WHERE table_id=$1
-               AND ($2 IS NULL OR commit_version >= $2)
-               AND ($3 IS NULL OR commit_version <= $3)
-             ORDER BY commit_version",
-    )
-    .bind(table_id)
-    .bind(starting_version)
-    .bind(ending_version)
-    .fetch_all(pool)
-    .await
-    .map_err(crate::sqlx_err)?;
-    Ok(rows)
+    let versions = store
+        .delta
+        .versions(table_id, starting_version, ending_version)
+        .await?;
+    let mut rows = Vec::with_capacity(versions.len());
+    for version in versions {
+        // Listed but unreadable means a hole in the table's history. The SQL
+        // would have returned a contiguous range or nothing; silently skipping
+        // would hand a Delta client a gap it cannot detect.
+        let bytes = store.delta.read(table_id, version).await?.ok_or_else(|| {
+            UcError::new(
+                ErrorCode::Internal,
+                format!("delta log hole: version {version} listed but unreadable"),
+            )
+        })?;
+        rows.push(decode(&bytes)?);
+    }
+    Ok(rows) // already ascending, matching ORDER BY commit_version
 }
 
-pub async fn latest_version(pool: &AnyPool, table_id: Uuid) -> Result<Option<i64>, UcError> {
-    let row: Option<(i64,)> =
-        sqlx::query_as("SELECT MAX(commit_version) FROM uc_delta_commits WHERE table_id=$1")
-            .bind(table_id)
-            .fetch_optional(pool)
-            .await
-            .map_err(crate::sqlx_err)?;
-    Ok(row.map(|(v,)| v))
+pub async fn latest_version(store: &Store, table_id: Uuid) -> Result<Option<i64>, UcError> {
+    store.delta.latest_version(table_id).await
 }
 
 /// Flag the commit at `version` as the backfilled latest for its table.
-/// Lifted out of delta_api/tables.rs.
+///
+/// This edits a commit object that is otherwise write-once. It is safe because
+/// the flag is a latch — false to true, idempotent, so concurrent setters
+/// converge — and because it touches no field that participates in the object
+/// key. See `DeltaLog::mutate_commit` for the full reasoning.
+///
+/// A missing commit is a no-op, matching the SQL UPDATE's zero rows matched.
 pub async fn mark_backfilled(
-    pool: &AnyPool,
+    store: &Store,
     table_id: Uuid,
     version: i64,
 ) -> Result<(), UcError> {
-    sqlx::query(
-        "UPDATE uc_delta_commits SET is_backfilled_latest_commit=1 \
-         WHERE table_id=$1 AND commit_version=$2",
-    )
-    .bind(table_id)
-    .bind(version)
-    .execute(pool)
-    .await
-    .map_err(crate::sqlx_err)?;
-    Ok(())
+    store
+        .delta
+        .mutate_commit(table_id, version, |doc| {
+            doc["is_backfilled_latest_commit"] = serde_json::Value::Bool(true);
+        })
+        .await
 }

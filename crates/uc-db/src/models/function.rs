@@ -1,7 +1,6 @@
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-#[cfg_attr(feature = "sql", derive(sqlx::FromRow))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FunctionRow {
     pub id: Uuid,
@@ -26,7 +25,6 @@ pub struct FunctionRow {
     pub specific_name: Option<String>,
 }
 
-#[cfg_attr(feature = "sql", derive(sqlx::FromRow))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FunctionParamRow {
     pub id: Uuid,

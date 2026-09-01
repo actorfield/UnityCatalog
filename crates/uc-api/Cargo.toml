@@ -4,12 +4,6 @@ version = "0.1.0"
 edition = "2021"
 license.workspace = true
 
-[features]
-default = ["sqlite"]
-sqlite = ["uc-db/sqlite", "uc-auth/sqlite"]
-postgres = ["uc-db/postgres", "uc-auth/postgres"]
-logstore = ["uc-db/logstore", "uc-auth/logstore"]
-
 [dependencies]
 uc-errors = { path = "../uc-errors" }
 uc-types = { path = "../uc-types" }

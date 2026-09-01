@@ -710,7 +710,6 @@ async fn a_bounded_range_does_not_page_the_whole_partition() {
 //
 // These reach through `repos::*`, which resolves to the SQL bodies unless the
 // `logstore` feature selects the ported ones — so they only compile there.
-#[cfg(feature = "logstore")]
 mod ported {
     use super::*;
 

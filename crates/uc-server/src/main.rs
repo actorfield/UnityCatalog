@@ -54,7 +54,6 @@ struct Args {
     /// window between another replica's commit and the next refresh. It turns
     /// unbounded staleness into bounded staleness, which is a different and
     /// weaker claim.
-    #[cfg(feature = "logstore")]
     #[arg(long, default_value_t = 0)]
     refresh_interval_secs: u64,
 
@@ -74,7 +73,6 @@ struct Args {
     /// Feature-gated rather than accepted-and-ignored on the SQL builds, so
     /// passing it to a binary that cannot honour it fails loudly instead of
     /// starting quietly against a database.
-    #[cfg(feature = "logstore")]
     #[arg(long, default_value = "")]
     storage_root: String,
 
@@ -202,9 +200,6 @@ async fn main() -> anyhow::Result<()> {
 
     info!("Starting Unity Catalog server on port {}", args.port);
     info!("Config dir: {}", args.config_dir.display());
-    #[cfg(not(feature = "logstore"))]
-    info!("Database:   {}", mask_db_url(&args.database_url));
-    #[cfg(feature = "logstore")]
     info!("Metadata:   {}", args.storage_root);
     info!(
         "Auth:       {}",
@@ -218,37 +213,7 @@ async fn main() -> anyhow::Result<()> {
     // `.policy()`), so a private key anywhere in that bucket is readable by
     // anything holding a vended credential, which would let it forge tokens for
     // any principal. There is deliberately no flag to opt into that.
-    #[cfg(not(feature = "logstore"))]
-    let (pool, key_manager, s3_info) = {
-        let key_manager = match args.key_file {
-            Some(ref path) => {
-                info!("Keys:       {}", path.display());
-                KeyManager::load_from_file(path).context("Failed to load key file")?
-            }
-            None => {
-                // Local dev only: generated into the config dir on first run.
-                info!(
-                    "Keys:       {} (generated if absent)",
-                    args.config_dir.display()
-                );
-                KeyManager::load_or_generate(&args.config_dir)
-                    .context("Failed to initialize RSA keys")?
-            }
-        };
-        let (actual_db_url, s3_info) = prepare_database_url(&args.config_dir, &args.database_url)
-            .await
-            .context("Failed to prepare database URL")?;
-        let pool = uc_db::pool::connect(&actual_db_url)
-            .await
-            .context("Failed to connect to database")?;
-        uc_db::pool::run_migrations(&pool)
-            .await
-            .context("Failed to run database migrations")?;
-        info!("Database migrations applied");
-        (pool, key_manager, s3_info)
-    };
 
-    #[cfg(feature = "logstore")]
     let (pool, key_manager) = {
         // A mounted Secret is the only supported source here. There is no
         // config-dir fallback either: generating on a stateless replica would
@@ -367,7 +332,6 @@ async fn main() -> anyhow::Result<()> {
     };
 
     // ── 8b. Snapshot refresh ──────────────────────────────────────────────────
-    #[cfg(feature = "logstore")]
     if args.refresh_interval_secs > 0 {
         let refresher = pool.clone();
         let period = std::time::Duration::from_secs(args.refresh_interval_secs);
@@ -425,38 +389,10 @@ async fn main() -> anyhow::Result<()> {
         .await
         .context("Failed to bind to port")?;
 
-    // The receiver is only used by the SQLite shutdown sync below.
-    #[cfg_attr(feature = "logstore", allow(unused_variables))]
-    let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
-    // Push the SQLite file back to S3 on clean shutdown. Not reachable on the
-    // log store: every commit is already durable in the object store when it
-    // is acknowledged, so there is nothing to flush at exit.
-    #[cfg(not(feature = "logstore"))]
-    if let Some(ref s3_info) = s3_info {
-        let s3_client = build_s3_client().ok();
-        let bucket = s3_info.bucket.clone();
-        let key = s3_info.key.clone();
-        let local_path = s3_info.local_path.clone();
-        tokio::spawn(async move {
-            let _ = shutdown_rx.await;
-            if let Some(client) = s3_client {
-                let endpoint = std::env::var("AWS_ENDPOINT_URL").unwrap_or_default();
-                let url = if endpoint.is_empty() {
-                    format!("https://{bucket}.s3.amazonaws.com/{key}")
-                } else {
-                    format!("{endpoint}/{bucket}/{key}")
-                };
-                if let Ok(data) = tokio::fs::read(&local_path).await {
-                    let _ = client.put(&url).body(data).send().await;
-                    info!("Uploaded metadata DB to s3://{bucket}/{key}");
-                }
-            }
-        });
-    }
-
+    // Nothing to flush at exit: every commit is already durable in the object
+    // store by the time it is acknowledged. The shutdown channel that used to
+    // live here existed only to push the SQLite file back to S3.
     axum::serve(listener, app).await.context("Server error")?;
-
-    let _ = shutdown_tx.send(());
     Ok(())
 }
 
@@ -467,7 +403,6 @@ async fn main() -> anyhow::Result<()> {
 /// `AWS_ENDPOINT_URL` redirects to MinIO, and forces path-style addressing:
 /// virtual-host style would resolve `bucket.minio.svc` as a hostname, which
 /// does not exist in-cluster.
-#[cfg(feature = "logstore")]
 async fn open_log_store(storage_root: &str) -> anyhow::Result<uc_db::AnyPool> {
     use std::sync::Arc;
 
@@ -500,146 +435,16 @@ async fn open_log_store(storage_root: &str) -> anyhow::Result<uc_db::AnyPool> {
 
 // ── S3-backed SQLite support ────────────────────────────────────────────────────
 
-#[cfg(not(feature = "logstore"))]
-#[allow(dead_code)]
-struct S3Info {
-    bucket: String,
-    pub key: String,
-    pub local_path: PathBuf,
-}
 
-#[cfg(not(feature = "logstore"))]
-async fn prepare_database_url(
-    config_dir: &std::path::Path,
-    url: &str,
-) -> anyhow::Result<(String, Option<S3Info>)> {
-    let Some(stripped) = url.strip_prefix("s3://") else {
-        tokio::fs::create_dir_all("./etc/db").await.ok();
-        return Ok((url.to_string(), None));
-    };
 
-    let (bucket, key) = match stripped.split_once('/') {
-        Some((b, k)) => (b.to_string(), k.to_string()),
-        None => anyhow::bail!("Invalid s3:// URL: expected s3://bucket/key, got {url}"),
-    };
 
-    let s3_client = build_s3_client()?;
-    let local_dir = config_dir.join("db");
-    tokio::fs::create_dir_all(&local_dir).await?;
-    let local_path = local_dir.join(format!("uc-{}.db", sanitize_filename(&key)));
 
-    download_from_s3(&s3_client, &bucket, &key, &local_path).await?;
-    info!("Downloaded metadata DB from s3://{bucket}/{key}");
-
-    let sqlite_url = format!("sqlite:{}?mode=rwc", local_path.display());
-    Ok((
-        sqlite_url,
-        Some(S3Info {
-            bucket,
-            key,
-            local_path,
-        }),
-    ))
-}
-
-#[cfg(not(feature = "logstore"))]
-fn build_s3_client() -> anyhow::Result<reqwest::Client> {
-    let endpoint = std::env::var("AWS_ENDPOINT_URL").unwrap_or_default();
-    let key_id = std::env::var("AWS_ACCESS_KEY_ID").unwrap_or_default();
-    let secret = std::env::var("AWS_SECRET_ACCESS_KEY").unwrap_or_default();
-
-    let mut builder = reqwest::Client::builder();
-    if !endpoint.is_empty() {
-        let auth = format!("{}:{}", key_id, secret);
-        let encoded = base64_encode(&auth);
-        let header_value = format!("Basic {encoded}");
-        let mut headers = reqwest::header::HeaderMap::new();
-        if let Ok(hv) = reqwest::header::HeaderValue::from_str(&header_value) {
-            headers.insert(reqwest::header::AUTHORIZATION, hv);
-        }
-        builder = builder.default_headers(headers);
-    }
-    Ok(builder.build()?)
-}
-
-#[cfg(not(feature = "logstore"))]
-async fn download_from_s3(
-    client: &reqwest::Client,
-    bucket: &str,
-    key: &str,
-    local_path: &std::path::Path,
-) -> anyhow::Result<()> {
-    if local_path.exists() {
-        return Ok(());
-    }
-    let endpoint = std::env::var("AWS_ENDPOINT_URL").unwrap_or_default();
-    let url = if endpoint.is_empty() {
-        format!("https://{bucket}.s3.amazonaws.com/{key}")
-    } else {
-        format!("{endpoint}/{bucket}/{key}")
-    };
-    let resp = client.get(&url).send().await?;
-    if resp.status().is_success() {
-        let bytes = resp.bytes().await?;
-        tokio::fs::write(local_path, &bytes).await?;
-    }
-    Ok(())
-}
-
-#[cfg(not(feature = "logstore"))]
-fn sanitize_filename(key: &str) -> String {
-    key.replace('/', "_")
-}
 
 /// Redact the `user:password@` credentials from a database URL before logging.
 /// SQLite URLs have no credentials and pass through unchanged; Postgres/S3
 /// URLs of the form `scheme://user:pass@host/...` have the password masked.
-#[cfg(not(feature = "logstore"))]
-fn mask_db_url(url: &str) -> String {
-    let Some((scheme, rest)) = url.split_once("://") else {
-        return url.to_string();
-    };
-    // Only the authority (up to the first '/') can carry credentials.
-    let (authority, path) = match rest.split_once('/') {
-        Some((a, p)) => (a, Some(p)),
-        None => (rest, None),
-    };
-    let masked_authority = match authority.split_once('@') {
-        Some((creds, host)) => {
-            let user = creds.split_once(':').map(|(u, _)| u).unwrap_or(creds);
-            format!("{user}:****@{host}")
-        }
-        None => authority.to_string(),
-    };
-    match path {
-        Some(p) => format!("{scheme}://{masked_authority}/{p}"),
-        None => format!("{scheme}://{masked_authority}"),
-    }
-}
 
-#[cfg(not(feature = "logstore"))]
-fn base64_encode(input: &str) -> String {
-    let mut buf = Vec::new();
-    for chunk in input.as_bytes().chunks(3) {
-        let b0 = chunk[0];
-        let b1 = if chunk.len() > 1 { chunk[1] } else { 0 };
-        let b2 = if chunk.len() > 2 { chunk[2] } else { 0 };
-        let n = (b0 as u32) << 16 | (b1 as u32) << 8 | (b2 as u32);
-        buf.push(ENC_TABLE[((n >> 18) & 63) as usize]);
-        buf.push(ENC_TABLE[((n >> 12) & 63) as usize]);
-        buf.push(ENC_TABLE[((n >> 6) & 63) as usize]);
-        buf.push(ENC_TABLE[(n & 63) as usize]);
-    }
-    let padding = (3 - input.len() % 3) % 3;
-    for _ in 0..padding {
-        buf.pop();
-        buf.push(b'=');
-    }
-    String::from_utf8(buf).unwrap()
-}
 
-#[cfg(not(feature = "logstore"))]
-const ENC_TABLE: [u8; 64] = *b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 
 // ── OIDC JWKS discovery ───────────────────────────────────────────────────────
 

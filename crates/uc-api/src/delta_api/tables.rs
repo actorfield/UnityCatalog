@@ -99,9 +99,17 @@ pub async fn load_table(
 ) -> Result<Json<DeltaLoadTableResponse>, UcError> {
     let schema_row = schema::get_by_full_name(&state.pool, &catalog, &schema).await?;
     let row = table::get_by_schema_and_name(&state.pool, schema_row.id, &table).await?;
+    // A table with no commits reports version 0, matching what `create` returns
+    // just above — otherwise creating a table and immediately loading it gives
+    // two different versions.
+    //
+    // Under SQLite this was accidental: `SELECT MAX(commit_version)` over no
+    // rows decoded as 0, so the `-1` branch was unreachable here and the
+    // inconsistency never showed. The log store returns None honestly, which is
+    // what surfaced it.
     let latest = uc_db::repos::delta::latest_version(&state.pool, row.id)
         .await?
-        .unwrap_or(-1);
+        .unwrap_or(0);
     let metadata = DeltaTableMetadata {
         etag: Some(row.id.to_string()),
         table_type: Some(row.r#type.clone()),
@@ -140,6 +148,10 @@ pub async fn update_table(
     let schema_row = schema::get_by_full_name(&state.pool, &catalog, &schema).await?;
     let row = table::get_by_schema_and_name(&state.pool, schema_row.id, &table).await?;
     let now = chrono::Utc::now().timestamp_millis();
+    // -1 here, unlike the load path above: this is the *last committed*
+    // version, so an empty table must read as "one before zero" for the next
+    // commit to land at 0. SQLite's MAX-over-nothing returned 0 and would have
+    // pushed the first commit to version 1.
     let mut latest = uc_db::repos::delta::latest_version(&state.pool, row.id)
         .await?
         .unwrap_or(-1);

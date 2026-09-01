@@ -19,14 +19,14 @@ use tower::ServiceExt;
 use uc_api::{catalog_api, control_api, delta_api, middleware::auth_middleware, state::AppState};
 use uc_auth::{AllowingAuthorizer, JwtConfig, KeyManager, OidcConfig};
 use uc_credentials::CloudCredentialVendor;
-use uc_db::{pool::run_migrations, AnyPool};
+use uc_db::{store::memory::MemoryLog, AnyPool};
 
-/// Build a test app with in-memory SQLite and AllowingAuthorizer (no-auth mode).
+/// Build a test app over an in-memory log store, with AllowingAuthorizer
+/// (no-auth mode).
 pub async fn build_test_app() -> (Router, AnyPool) {
-    let pool = AnyPool::connect("sqlite::memory:")
+    let pool = AnyPool::open(Arc::new(MemoryLog::new()))
         .await
-        .expect("in-memory sqlite");
-    run_migrations(&pool).await.expect("migrations");
+        .expect("in-memory log store");
 
     let metastore = uc_db::repos::metastore::get_or_init(&pool, "test-metastore")
         .await
@@ -136,10 +136,9 @@ pub const DELTA: &str = "/delta/v1";
 /// Build a test app with auth ENABLED and an optional OIDC config.
 /// Uses AllowingAuthorizer so permission checks always pass.
 pub async fn build_auth_test_app(oidc_config: Option<Arc<OidcConfig>>) -> Router {
-    let pool = AnyPool::connect("sqlite::memory:")
+    let pool = AnyPool::open(Arc::new(MemoryLog::new()))
         .await
-        .expect("in-memory sqlite");
-    run_migrations(&pool).await.expect("migrations");
+        .expect("in-memory log store");
 
     let metastore = uc_db::repos::metastore::get_or_init(&pool, "auth-test-metastore")
         .await
