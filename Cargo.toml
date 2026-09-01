@@ -46,7 +46,12 @@ rsa = { version = "0.9", features = ["sha2", "pkcs5"] }
 # Cloud SDK deps (feature-gated in uc-credentials)
 aws-config = { version = "1", default-features = false, features = ["rustls", "rt-tokio"] }
 aws-sdk-sts = { version = "1", default-features = false, features = ["rustls", "rt-tokio"] }
-aws-sdk-s3 = { version = "1", default-features = false, features = ["rustls", "rt-tokio"] }
+# Floored rather than left at "1": the log store's put_if_absent needs
+# PutObject's if_none_match, which older 1.x releases do not expose. Cargo.lock
+# is gitignored here, so a fresh clone resolves whatever is current and nothing
+# else records the requirement. 1.144 is the version this was built and tested
+# against; the true minimum is lower but has not been verified.
+aws-sdk-s3 = { version = "1.144", default-features = false, features = ["rustls", "rt-tokio"] }
 
 [profile.release]
 lto = true
