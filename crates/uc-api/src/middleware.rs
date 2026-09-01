@@ -4,7 +4,7 @@ use axum::{
     response::Response,
 };
 use std::sync::Arc;
-use uc_auth::{decode_oidc_sub, jwt::decode_token, UcClaims};
+use uc_auth::{decode_oidc_sub, UcClaims};
 use uc_db::repos::user;
 use uc_errors::{error_into_response, ErrorFormat, UcError};
 use uc_types::TokenType;
@@ -55,34 +55,33 @@ pub async fn auth_middleware(
         }
     };
 
-    // Decode and validate JWT — try UC-issued first, then OIDC issuer if configured
-    let claims = match decode_token(&state.jwt_config, &token) {
-        Ok(td) => td.claims,
-        Err(uc_err) => {
-            // OIDC-validated tokens map to a per-caller principal so distinct
-            // identities (e.g. each K8s ServiceAccount) aren't collapsed into a
-            // single shared admin principal. Each external `sub` resolves to its
-            // own (lazily-created, zero-grant) uc_users row.
-            if let Some(oidc) = &state.oidc_config {
-                match decode_oidc_sub(oidc, &token) {
-                    Ok(sub) => match user::find_or_create_by_external_id(&state.pool, &sub).await {
-                        Ok(row) => UcClaims {
-                            sub: row
-                                .email
-                                .unwrap_or_else(|| row.external_id.clone().unwrap_or(sub)),
-                            iss: oidc.issuer.clone(),
-                            iat: chrono::Utc::now().timestamp(),
-                            jti: uuid::Uuid::now_v7().to_string(),
-                            token_type: TokenType::Service,
-                        },
-                        Err(e) => return error_into_response(e, ErrorFormat::Catalog),
-                    },
-                    Err(_) => return error_into_response(uc_err, ErrorFormat::Catalog),
-                }
-            } else {
-                return error_into_response(uc_err, ErrorFormat::Catalog);
-            }
-        }
+    // Validate against the configured OIDC issuer. UC signs no tokens of its
+    // own: it is a resource server, so the only trust root is the issuer's
+    // JWKS. `oidc_config` is Some whenever auth is enabled -- the two are set
+    // from the same flag, so there is no state where auth is on with no way to
+    // authenticate.
+    let Some(oidc) = &state.oidc_config else {
+        let err = UcError::unauthenticated("No OIDC issuer configured");
+        return error_into_response(err, ErrorFormat::Catalog);
+    };
+
+    // Each external `sub` resolves to its own lazily-created, zero-grant
+    // uc_users row, so distinct identities (one per K8s ServiceAccount, say)
+    // are not collapsed into a single shared principal.
+    let claims = match decode_oidc_sub(oidc, &token) {
+        Ok(sub) => match user::find_or_create_by_external_id(&state.pool, &sub).await {
+            Ok(row) => UcClaims {
+                sub: row
+                    .email
+                    .unwrap_or_else(|| row.external_id.clone().unwrap_or(sub)),
+                iss: oidc.issuer.clone(),
+                iat: chrono::Utc::now().timestamp(),
+                jti: uuid::Uuid::now_v7().to_string(),
+                token_type: TokenType::Service,
+            },
+            Err(e) => return error_into_response(e, ErrorFormat::Catalog),
+        },
+        Err(e) => return error_into_response(e, ErrorFormat::Catalog),
     };
 
     // SERVICE tokens bypass user DB lookup — they represent the server itself

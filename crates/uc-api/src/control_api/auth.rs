@@ -1,73 +1,14 @@
+//! What remains of the control-plane auth surface.
+//!
+//! Token exchange and the JWKS endpoint are gone: UC signs no tokens, so it has
+//! no key to publish and nothing to exchange for. Callers present a token from
+//! the configured OIDC issuer and it is validated against that issuer's JWKS.
+
 use crate::state::AppState;
-use axum::{extract::State, http::StatusCode, Json};
-use uc_auth::jwt::{encode_token, UcClaims};
-use uc_db::repos::user;
-use uc_errors::{ErrorCode, UcError};
-use uc_openapi::control::OAuthTokenExchangeResponse;
+use axum::{extract::State, http::StatusCode};
 
-#[derive(serde::Deserialize)]
-pub struct TokenForm {
-    pub grant_type: Option<String>,
-    pub subject_token: Option<String>,
-    pub subject_token_type: Option<String>,
-}
-
-pub async fn token_exchange(
-    State(state): State<AppState>,
-    Json(form): Json<TokenForm>,
-) -> Result<Json<OAuthTokenExchangeResponse>, UcError> {
-    let gt = form.grant_type.as_deref().unwrap_or("");
-    if gt != "urn:ietf:params:oauth:grant-type:token-exchange" {
-        return Err(UcError::new(
-            ErrorCode::InvalidArgument,
-            format!("Unsupported grant_type: {}", gt),
-        ));
-    }
-
-    let subject_token = form
-        .subject_token
-        .as_deref()
-        .ok_or_else(|| UcError::new(ErrorCode::InvalidArgument, "subject_token required"))?;
-
-    // When auth is disabled, issue a token for the subject directly (no DB lookup required)
-    let sub = if !state.auth_enabled {
-        subject_token.to_string()
-    } else {
-        // Auth enabled: look up the user in the DB (email, then external_id for
-        // OIDC-mapped principals, which have no email)
-        let found = match user::get_by_email(&state.pool, subject_token).await? {
-            Some(u) => Some(u),
-            None => user::get_by_external_id(&state.pool, subject_token).await?,
-        };
-        let user = found.ok_or_else(|| {
-            UcError::unauthenticated(format!("User '{}' not found", subject_token))
-        })?;
-        if !user.is_enabled() {
-            return Err(UcError::unauthenticated("User account is disabled"));
-        }
-        user.email.unwrap_or(user.name)
-    };
-
-    let claims = UcClaims::new_access(sub);
-    let token = encode_token(&state.jwt_config, &claims)?;
-
-    Ok(Json(OAuthTokenExchangeResponse {
-        access_token: token,
-        token_type: "Bearer".to_string(),
-        expires_in: None,
-        scope: None,
-        issued_token_type: "urn:ietf:params:oauth:token-type:access_token".to_string(),
-    }))
-}
-
+/// Kept as a no-op so clients that call it on sign-out get a 200 rather than a
+/// 404. There is no server-side session to end.
 pub async fn logout(State(_state): State<AppState>) -> StatusCode {
     StatusCode::OK
-}
-
-pub async fn jwks(State(state): State<AppState>) -> Result<String, UcError> {
-    // Derived from the keypair at startup. Previously read from certs.json on
-    // every request, which failed permanently whenever that file was absent --
-    // and it was only ever written on the key-generation path, never when
-    // existing keys were loaded.
-    Ok(state.jwks.as_ref().clone())
 }

@@ -9,7 +9,7 @@ use std::{
 use tracing::info;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 use uc_api::{catalog_api, control_api, delta_api, middleware::auth_middleware, state::AppState};
-use uc_auth::{AllowingAuthorizer, JwkSet, JwtConfig, KeyManager, OidcConfig, UcAuthorizer};
+use uc_auth::{AllowingAuthorizer, JwkSet, OidcConfig, UcAuthorizer};
 use uc_credentials::CloudCredentialVendor;
 use uc_db::{
     repos::{metastore, user},
@@ -28,16 +28,6 @@ struct Args {
     #[arg(long, default_value = "./etc/conf")]
     config_dir: PathBuf,
 
-    /// Path to JWT signing key material, as written by `KeyManager::encode` —
-    /// how a mounted Kubernetes Secret arrives.
-    ///
-    /// Preferred over every other source. When set, the key is loaded from here
-    /// and never generated: a configured-but-missing file is a startup error,
-    /// because silently minting a fresh keypair invalidates every issued token
-    /// while looking like a clean start.
-    #[arg(long)]
-    key_file: Option<PathBuf>,
-
     /// Seconds between background refreshes of the in-memory snapshot from the
     /// log. 0 disables it.
     ///
@@ -54,28 +44,19 @@ struct Args {
     #[arg(long, default_value_t = 0)]
     refresh_interval_secs: u64,
 
-    /// Generate fresh JWT signing key material at this path, then exit.
-    ///
-    /// The one supported way to produce a `--key-file`, for loading into a
-    /// secret store. A separate mode rather than a fallback: generating as a
-    /// side effect of a failed load is what silently rotates a live key and
-    /// invalidates every issued token. Refuses to overwrite an existing file.
-    #[arg(long)]
-    generate_key_file: Option<PathBuf>,
-
     /// Object-store root for the log-structured metadata store, as
     /// `s3://bucket/prefix`. There is no database, no migrations and no volume
     /// to lose.
     #[arg(long, default_value = "")]
     storage_root: String,
 
-    /// Disable authorization (allow all requests). Use only in dev/testing.
-    #[arg(long, default_value_t = false)]
-    no_auth: bool,
-
-    /// OIDC issuer URL. When set, Bearer tokens issued by this issuer are
-    /// accepted via JWKS validation (fetched from {issuer}/.well-known/...).
-    /// Intended for in-cluster K8s SA projected tokens.
+    /// OIDC issuer URL. Bearer tokens from this issuer are accepted, validated
+    /// against its JWKS.
+    ///
+    /// This single flag decides authentication: set, and auth and RBAC are
+    /// enforced; unset, and every request is allowed. They were two flags, and
+    /// "auth enabled with no issuer" was a startup that accepted nothing --
+    /// UC signs no tokens of its own, so the issuer is the only trust root.
     #[arg(long)]
     oidc_issuer: Option<String>,
 
@@ -177,50 +158,16 @@ async fn main() -> anyhow::Result<()> {
         .with(tracing_subscriber::fmt::layer().with_ansi(false))
         .init();
 
-    // One-shot mode: produce key material and exit without starting anything.
-    if let Some(ref path) = args.generate_key_file {
-        if path.exists() {
-            anyhow::bail!(
-                "{} already exists; refusing to overwrite live key material",
-                path.display()
-            );
-        }
-        let km = KeyManager::generate().context("Failed to generate RSA keys")?;
-        km.write_to_file(path).context("Failed to write key file")?;
-        info!("Wrote key material to {} (kid {})", path.display(), km.key_id);
-        return Ok(());
-    }
-
     info!("Starting Unity Catalog server on port {}", args.port);
     info!("Config dir: {}", args.config_dir.display());
     info!("Metadata:   {}", args.storage_root);
     info!(
         "Auth:       {}",
-        if args.no_auth { "disabled" } else { "enabled" }
+        if args.oidc_issuer.is_some() { "enabled" } else { "disabled" }
     );
 
-    // ── 1-2. Store and key material ───────────────────────────────────────────
-    //
-    // Key material never goes into the object store. UC vends bucket-scoped
-    // credentials with no session policy (uc-credentials' assume_role sets no
-    // `.policy()`), so a private key anywhere in that bucket is readable by
-    // anything holding a vended credential, which would let it forge tokens for
-    // any principal. There is deliberately no flag to opt into that.
-
-    let (pool, key_manager) = {
-        // A mounted Secret is the only supported source here. There is no
-        // config-dir fallback either: generating on a stateless replica would
-        // mint a different keypair per pod.
-        let key_path = args.key_file.as_ref().ok_or_else(|| {
-            anyhow::anyhow!(
-                "--key-file is required: JWT signing key material must come from a \
-                 secret store, mounted as a file"
-            )
-        })?;
-        info!("Keys:       {}", key_path.display());
-        let key_manager =
-            KeyManager::load_from_file(key_path).context("Failed to load key file")?;
-
+    // ── 1. Store ──────────────────────────────────────────────────────────────
+    let pool = {
         let pool = open_log_store(&args.storage_root)
             .await
             .context("Failed to open the metadata log")?;
@@ -228,15 +175,8 @@ async fn main() -> anyhow::Result<()> {
             "Log store replayed to version {}",
             pool.snapshot().await.version
         );
-        (pool, key_manager)
+        pool
     };
-
-    let jwt_config = JwtConfig::from_der(
-        &key_manager.private_key_der,
-        &key_manager.public_key_der,
-        key_manager.key_id.clone(),
-    )
-    .context("Failed to create JWT config")?;
 
     // ── 3. Metastore initialization ───────────────────────────────────────────
     let metastore = metastore::get_or_init(&pool, "unity-catalog")
@@ -246,7 +186,7 @@ async fn main() -> anyhow::Result<()> {
     info!("Metastore ID: {}", metastore_id);
 
     // ── 4. Authorization ──────────────────────────────────────────────────────
-    let authorizer: Arc<dyn uc_auth::Authorizer> = if args.no_auth {
+    let authorizer: Arc<dyn uc_auth::Authorizer> = if args.oidc_issuer.is_none() {
         info!("Authorization disabled — all requests allowed");
         Arc::new(AllowingAuthorizer)
     } else {
@@ -259,7 +199,7 @@ async fn main() -> anyhow::Result<()> {
 
     // ── 5. Admin user initialization ──────────────────────────────────────────
     let admin_email = "admin@unitycatalog.io";
-    if !args.no_auth && user::get_by_email(&pool, admin_email).await?.is_none() {
+    if args.oidc_issuer.is_some() && user::get_by_email(&pool, admin_email).await?.is_none() {
         // UUIDv7: time-ordered — encodes when this admin user was created
         let admin_id = Uuid::now_v7();
         let now = chrono::Utc::now().timestamp_millis();
@@ -282,7 +222,7 @@ async fn main() -> anyhow::Result<()> {
     }
 
     // ── 5b. Operator bootstrap principal (Tier 2 auto-provisioning) ───────────
-    if !args.no_auth {
+    if args.oidc_issuer.is_some() {
         bootstrap_operator_principal(
             &pool,
             authorizer.as_ref(),
@@ -293,21 +233,8 @@ async fn main() -> anyhow::Result<()> {
         .context("Failed to bootstrap operator principal")?;
     }
 
-    // ── 6. Admin token (write to config_dir for local dev convenience) ────────
-    let token_claims = uc_auth::jwt::UcClaims::new_access(admin_email);
-    let token = uc_auth::jwt::encode_token(&jwt_config, &token_claims)
-        .context("Failed to create admin token")?;
-    // The config dir is not guaranteed to exist. On the SQLite path it was
-    // created as a side effect of persisting the keypair; with the keys in the
-    // object store nothing creates it, and this write was the first thing to
-    // touch it -- so startup failed outright.
-    std::fs::create_dir_all(&args.config_dir)
-        .with_context(|| format!("Failed to create {}", args.config_dir.display()))?;
-    std::fs::write(args.config_dir.join("token.txt"), &token)
-        .context("Failed to write token.txt")?;
-
     // ── 7. OIDC setup (optional; skipped when --no-auth) ─────────────────────
-    let oidc_config = if !args.no_auth {
+    let oidc_config = {
         if let Some(ref issuer) = args.oidc_issuer {
             let jwks = fetch_oidc_jwks(issuer)
                 .await
@@ -320,8 +247,6 @@ async fn main() -> anyhow::Result<()> {
         } else {
             None
         }
-    } else {
-        None
     };
 
     // ── 8b. Snapshot refresh ──────────────────────────────────────────────────
@@ -348,10 +273,8 @@ async fn main() -> anyhow::Result<()> {
         pool,
         authorizer,
         build_credential_vendor(args.enable_aws_credentials),
-        jwt_config,
-        uc_auth::keys::jwks(&key_manager),
         metastore_id,
-        !args.no_auth,
+        args.oidc_issuer.is_some(),
         args.config_dir.clone(),
         oidc_config,
     );

@@ -10,12 +10,7 @@ use axum::{
 
 pub fn router(state: AppState) -> Router {
     Router::new()
-        .route(
-            "/api/1.0/unity-control/auth/tokens",
-            post(auth::token_exchange),
-        )
         .route("/api/1.0/unity-control/auth/logout", post(auth::logout))
-        .route("/.well-known/jwks.json", get(auth::jwks))
         .route(
             "/api/1.0/unity-control/scim2/Users",
             post(scim2::create_user).get(scim2::list_users),

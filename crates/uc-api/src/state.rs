@@ -1,5 +1,5 @@
 use std::sync::Arc;
-use uc_auth::{Authorizer, JwtConfig, OidcConfig};
+use uc_auth::{Authorizer, OidcConfig};
 use uc_credentials::CloudCredentialVendor;
 use uc_db::AnyPool;
 use uuid::Uuid;
@@ -10,10 +10,6 @@ pub struct AppState {
     pub pool: Arc<AnyPool>,
     pub authorizer: Arc<dyn Authorizer>,
     pub credential_vendor: Arc<CloudCredentialVendor>,
-    pub jwt_config: Arc<JwtConfig>,
-    /// JWKS document for /jwks, derived from the signing keypair at startup
-    /// rather than read from a file on each request.
-    pub jwks: Arc<String>,
     pub metastore_id: Uuid,
     pub auth_enabled: bool,
     pub config_dir: std::path::PathBuf,
@@ -28,8 +24,6 @@ impl AppState {
         pool: AnyPool,
         authorizer: Arc<dyn Authorizer>,
         credential_vendor: CloudCredentialVendor,
-        jwt_config: JwtConfig,
-        jwks: String,
         metastore_id: Uuid,
         auth_enabled: bool,
         config_dir: std::path::PathBuf,
@@ -39,8 +33,6 @@ impl AppState {
             pool: Arc::new(pool),
             authorizer,
             credential_vendor: Arc::new(credential_vendor),
-            jwt_config: Arc::new(jwt_config),
-            jwks: Arc::new(jwks),
             metastore_id,
             auth_enabled,
             config_dir,

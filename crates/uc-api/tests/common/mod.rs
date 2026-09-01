@@ -21,7 +21,7 @@ use serde_json::Value;
 use std::sync::Arc;
 use tower::ServiceExt;
 use uc_api::{catalog_api, control_api, delta_api, middleware::auth_middleware, state::AppState};
-use uc_auth::{AllowingAuthorizer, JwtConfig, KeyManager, OidcConfig};
+use uc_auth::{AllowingAuthorizer, OidcConfig};
 use uc_credentials::CloudCredentialVendor;
 use uc_db::{store::memory::MemoryLog, AnyPool};
 
@@ -39,17 +39,11 @@ pub async fn build_test_app() -> (Router, AnyPool) {
     // Write keys to a temp dir so JWKS endpoint can serve certs.json
     let config_dir = std::env::temp_dir().join(format!("uc_test_{}", uuid::Uuid::now_v7()));
     std::fs::create_dir_all(&config_dir).expect("create config dir");
-    let km = KeyManager::load_or_generate(&config_dir).expect("key gen");
-    let jwt_config =
-        JwtConfig::from_der(&km.private_key_der, &km.public_key_der, km.key_id.clone())
-            .expect("jwt config");
 
     let state = AppState::new(
         pool.clone(),
         Arc::new(AllowingAuthorizer),
         CloudCredentialVendor::new(),
-        jwt_config,
-        uc_auth::keys::jwks(&km),
         metastore.id,
         false, // no-auth
         config_dir,
@@ -150,17 +144,11 @@ pub async fn build_auth_test_app(oidc_config: Option<Arc<OidcConfig>>) -> Router
 
     let config_dir = std::env::temp_dir().join(format!("uc_auth_test_{}", uuid::Uuid::now_v7()));
     std::fs::create_dir_all(&config_dir).expect("create config dir");
-    let km = KeyManager::load_or_generate(&config_dir).expect("key gen");
-    let jwt_config =
-        JwtConfig::from_der(&km.private_key_der, &km.public_key_der, km.key_id.clone())
-            .expect("jwt config");
 
     let state = AppState::new(
         pool,
         Arc::new(AllowingAuthorizer),
         CloudCredentialVendor::new(),
-        jwt_config,
-        uc_auth::keys::jwks(&km),
         metastore.id,
         true, // auth enabled
         config_dir,
