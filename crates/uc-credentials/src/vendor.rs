@@ -282,7 +282,7 @@ async fn presign_s3_url(
     }
     let s3_client = aws_sdk_s3::Client::from_conf(s3_config_builder.build());
 
-    let expiry = std::time::Duration::from_secs(presign_expiry_secs());
+    let expiry = Duration::from_secs(presign_expiry_secs());
     let presign_config = aws_sdk_s3::presigning::PresigningConfig::expires_in(expiry).ok()?;
 
     if is_write_operation(&ctx.operation) {

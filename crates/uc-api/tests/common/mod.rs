@@ -1,3 +1,7 @@
+// Shared test harness. Items are `pub` so each test binary can use them, but
+// within this compilation unit rustc sees no reachable path to them.
+#![allow(unreachable_pub)]
+
 // Each integration test file is compiled as its own binary and pulls in this
 // module separately, so helpers unused by one binary but used by another
 // trip dead_code false positives.

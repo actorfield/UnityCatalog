@@ -211,7 +211,7 @@ async fn a_dangling_checkpoint_pointer_falls_back_to_a_full_scan() {
     // Pointer to a checkpoint that was never written.
     log.put(
         action::LAST_CHECKPOINT_KEY,
-        serde_json::to_vec(&log::LastCheckpoint { version: 2, size: 2, checksum: None }).unwrap(),
+        serde_json::to_vec(&LastCheckpoint { version: 2, size: 2, checksum: None }).unwrap(),
     )
     .await
     .unwrap();
@@ -300,7 +300,7 @@ async fn a_truncated_checkpoint_is_rejected_in_favour_of_the_log() {
     // Claim more lines than the object holds.
     log.put(
         action::LAST_CHECKPOINT_KEY,
-        serde_json::to_vec(&log::LastCheckpoint { version: 2, size: 99, checksum: None }).unwrap(),
+        serde_json::to_vec(&LastCheckpoint { version: 2, size: 99, checksum: None }).unwrap(),
     )
     .await
     .unwrap();
@@ -765,7 +765,7 @@ mod ported {
         let store = Store::open(log.clone()).await.unwrap();
         let e = Uuid::now_v7();
 
-        let props = |pairs: &[(&str, &str)]| -> std::collections::HashMap<String, String> {
+        let props = |pairs: &[(&str, &str)]| -> HashMap<String, String> {
             pairs.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect()
         };
 
@@ -802,7 +802,7 @@ mod ported {
         let log = Arc::new(MemLog::default());
         let store = Store::open(log).await.unwrap();
         let (e1, e2) = (Uuid::now_v7(), Uuid::now_v7());
-        let one = |k: &str, v: &str| -> std::collections::HashMap<String, String> {
+        let one = |k: &str, v: &str| -> HashMap<String, String> {
             std::iter::once((k.to_string(), v.to_string())).collect()
         };
 

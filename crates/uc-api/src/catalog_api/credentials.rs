@@ -119,7 +119,7 @@ pub async fn update(
     let existing = credential::get_by_name(&state.pool, &name).await?;
     if state.auth_enabled {
         let user = get_user(&state, &claims.sub).await?;
-        require(&state, user.id, existing.id, uc_types::Privilege::Owner).await?;
+        require(&state, user.id, existing.id, Privilege::Owner).await?;
     }
     let effective_name = req.new_name.as_deref().unwrap_or(&name);
     let now = now_ms();

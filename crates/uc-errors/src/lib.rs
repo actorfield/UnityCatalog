@@ -531,7 +531,7 @@ mod tests {
         for code in &conflict_codes {
             assert_eq!(
                 code.delta_status(),
-                axum::http::StatusCode::CONFLICT,
+                StatusCode::CONFLICT,
                 "{:?} should be 409 in delta format",
                 code
             );
@@ -543,7 +543,7 @@ mod tests {
         use axum::response::IntoResponse;
         let err = UcError::new(ErrorCode::NotFound, "table not found");
         let resp = error_into_response(err, ErrorFormat::Delta).into_response();
-        assert_eq!(resp.status(), axum::http::StatusCode::NOT_FOUND);
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
     }
 
     #[test]
@@ -551,7 +551,7 @@ mod tests {
         use axum::response::IntoResponse;
         let err = UcError::new(ErrorCode::PermissionDenied, "access denied");
         let resp = error_into_response(err, ErrorFormat::Control).into_response();
-        assert_eq!(resp.status(), axum::http::StatusCode::FORBIDDEN);
+        assert_eq!(resp.status(), StatusCode::FORBIDDEN);
     }
 
     #[test]
@@ -559,7 +559,7 @@ mod tests {
         use axum::response::IntoResponse;
         let err = UcError::new(ErrorCode::AlreadyExists, "dup");
         let resp = error_into_response(err, ErrorFormat::Catalog).into_response();
-        assert_eq!(resp.status(), axum::http::StatusCode::CONFLICT);
+        assert_eq!(resp.status(), StatusCode::CONFLICT);
     }
 
     #[test]
@@ -567,7 +567,7 @@ mod tests {
         use axum::response::IntoResponse;
         let err = UcError::not_found("Table", "foo");
         let resp = err.into_response();
-        assert_eq!(resp.status(), axum::http::StatusCode::NOT_FOUND);
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
     }
 
     #[test]

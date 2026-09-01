@@ -205,14 +205,14 @@ mod tests {
         let claims = UcClaims::new_service();
         assert_eq!(claims.sub, "uc_service");
         assert_eq!(claims.iss, "internal");
-        assert_eq!(claims.token_type, uc_types::TokenType::Service);
+        assert_eq!(claims.token_type, TokenType::Service);
     }
 
     #[test]
     fn access_token_has_access_type() {
         let claims = UcClaims::new_access("user@example.com");
         assert_eq!(claims.sub, "user@example.com");
-        assert_eq!(claims.token_type, uc_types::TokenType::Access);
+        assert_eq!(claims.token_type, TokenType::Access);
         assert!(!claims.jti.is_empty());
         assert!(claims.iat > 0);
     }
@@ -225,7 +225,7 @@ mod tests {
         let claims = UcClaims::new_service();
         let token = encode_token(&config, &claims).unwrap();
         let decoded = decode_token(&config, &token).unwrap();
-        assert_eq!(decoded.claims.token_type, uc_types::TokenType::Service);
+        assert_eq!(decoded.claims.token_type, TokenType::Service);
     }
 
     #[test]

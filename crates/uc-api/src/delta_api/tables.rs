@@ -163,7 +163,7 @@ pub async fn update_table(
             match requirement {
                 DeltaTableRequirement::AssertTableUuid { uuid } => {
                     if *uuid != row.id {
-                        return Err(uc_errors::UcError::new(
+                        return Err(UcError::new(
                             uc_errors::ErrorCode::UpdateRequirementConflict,
                             format!(
                                 "assert-table-uuid failed: expected {} but got {}",
@@ -175,7 +175,7 @@ pub async fn update_table(
                 DeltaTableRequirement::AssertEtag { etag } => {
                     // Our etag is the table UUID string
                     if etag != &row.id.to_string() {
-                        return Err(uc_errors::UcError::new(
+                        return Err(UcError::new(
                             uc_errors::ErrorCode::UpdateRequirementConflict,
                             format!(
                                 "assert-etag failed: expected {} but current etag is {}",
@@ -194,7 +194,7 @@ pub async fn update_table(
         match update {
             DeltaTableUpdate::AddCommit { commit, .. } => {
                 if commit.version <= latest {
-                    return Err(uc_errors::UcError::new(
+                    return Err(UcError::new(
                         uc_errors::ErrorCode::CommitVersionConflict,
                         format!(
                             "Commit version {} already exists (latest: {})",
@@ -226,7 +226,7 @@ pub async fn update_table(
             DeltaTableUpdate::SetColumns { columns } => {
                 // Persist the new column schema as JSON in uc_columns
                 let col_json = serde_json::to_string(columns).unwrap_or_default();
-                uc_db::repos::table::patch(
+                table::patch(
                     &state.pool,
                     row.id,
                     Some(columns.fields.len() as i32),
@@ -247,7 +247,7 @@ pub async fn update_table(
                 .await?;
             }
             DeltaTableUpdate::SetTableComment { comment } => {
-                uc_db::repos::table::patch(&state.pool, row.id, None, Some(comment), None, None, now).await?;
+                table::patch(&state.pool, row.id, None, Some(comment), None, None, now).await?;
             }
             DeltaTableUpdate::SetPartitionColumns { partition_columns } => {
                 let json = serde_json::to_string(partition_columns).unwrap_or_default();
@@ -313,7 +313,7 @@ pub async fn update_table(
                 last_commit_timestamp_ms,
             } => {
                 // Update the table's metadata snapshot version tracking
-                uc_db::repos::table::patch(
+                table::patch(
                     &state.pool,
                     row.id,
                     None,

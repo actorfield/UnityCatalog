@@ -202,7 +202,7 @@ mod tests {
     use uuid::Uuid;
 
     /// A fresh, empty store for each test.
-    async fn in_memory_sqlite() -> AnyPool {
+    async fn fresh_store() -> AnyPool {
         use std::sync::Arc;
         AnyPool::open(Arc::new(uc_db::store::memory::MemoryLog::new()))
             .await
@@ -211,7 +211,7 @@ mod tests {
 
     #[tokio::test]
     async fn policies_survive_restart() {
-        let pool = in_memory_sqlite().await;
+        let pool = fresh_store().await;
 
         let principal = Uuid::now_v7();
         let resource = Uuid::now_v7();
@@ -240,7 +240,7 @@ mod tests {
 
     #[tokio::test]
     async fn create_catalog_allowed_for_metastore_owner_after_restart() {
-        let pool = in_memory_sqlite().await;
+        let pool = fresh_store().await;
 
         let admin = Uuid::now_v7();
         let metastore = Uuid::now_v7();
@@ -276,7 +276,7 @@ mod tests {
     /// expansion specifically, with OWNER absent from the checked privilege.
     #[tokio::test]
     async fn owner_implies_specific_privilege_via_g3_after_restart() {
-        let pool = in_memory_sqlite().await;
+        let pool = fresh_store().await;
 
         let principal = Uuid::now_v7();
         let catalog = Uuid::now_v7();
@@ -313,7 +313,7 @@ mod tests {
     /// reload and confirm OWNER still cascades AND implies a specific privilege.
     #[tokio::test]
     async fn save_policy_snapshot_preserves_g2_and_g3() {
-        let pool = in_memory_sqlite().await;
+        let pool = fresh_store().await;
         let principal = Uuid::now_v7();
         let catalog = Uuid::now_v7();
         let schema = Uuid::now_v7();

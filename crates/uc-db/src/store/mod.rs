@@ -382,7 +382,7 @@ impl StoreInner {
     }
 
     async fn maybe_checkpoint(&self, version: u64) {
-        if version % log::CHECKPOINT_INTERVAL != 0 {
+        if !version.is_multiple_of(log::CHECKPOINT_INTERVAL) {
             return;
         }
         // Best-effort: a failed checkpoint costs replay time, never data,

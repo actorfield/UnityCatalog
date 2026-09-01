@@ -38,7 +38,7 @@ pub async fn auth_middleware(
             iss: "internal".to_string(),
             iat: 0,
             jti: "disabled".to_string(),
-            token_type: uc_types::TokenType::Service,
+            token_type: TokenType::Service,
         });
         req.extensions_mut().insert(dummy);
         return next.run(req).await;
@@ -86,7 +86,7 @@ pub async fn auth_middleware(
     };
 
     // SERVICE tokens bypass user DB lookup — they represent the server itself
-    if claims.token_type != uc_types::TokenType::Service {
+    if claims.token_type != TokenType::Service {
         match user::get_by_email(&state.pool, &claims.sub).await {
             Ok(Some(user)) if user.is_enabled() => {}
             Ok(Some(_)) => {

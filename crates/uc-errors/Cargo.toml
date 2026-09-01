@@ -5,8 +5,9 @@ edition = "2021"
 license.workspace = true
 
 [dependencies]
-thiserror = { workspace = true }
 serde = { workspace = true }
-serde_json = { workspace = true }
 axum = { workspace = true }
 http = "1"
+
+[lints]
+workspace = true

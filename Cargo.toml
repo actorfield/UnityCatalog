@@ -14,6 +14,26 @@ members = [
 [workspace.package]
 license = "Apache-2.0"
 
+# Enforced across every crate rather than left to whoever runs clippy locally.
+# The set is deliberately one that passes clean today: a lint config carrying
+# standing warnings just teaches people to scroll past it.
+[workspace.lints.rust]
+# There is no unsafe in this workspace and no reason for any: forbid rather
+# than deny, so it cannot be re-enabled with a local #[allow].
+unsafe_code = "forbid"
+unused_qualifications = "warn"
+unreachable_pub = "warn"
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }
+
+# Reviewed and left off, not overlooked:
+#   cast_possible_truncation / cast_sign_loss — 14 sites, all benign (column
+#     counts, page limits already guarded by pagination::page). Turning them on
+#     needs an annotation at each; worth doing, but as its own cleanup.
+#   unwrap_used / expect_used / panic — ~500 hits, almost entirely in tests,
+#     where they are the idiom.
+
 [workspace.dependencies]
 axum = { version = "0.7", features = ["macros"] }
 tower = { version = "0.4", features = ["util"] }

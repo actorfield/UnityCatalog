@@ -28,9 +28,6 @@ struct Args {
     #[arg(long, default_value = "./etc/conf")]
     config_dir: PathBuf,
 
-    #[arg(long, default_value = "sqlite:./etc/db/uc.db?mode=rwc")]
-    database_url: String,
-
     /// Path to JWT signing key material, as written by `KeyManager::encode` —
     /// how a mounted Kubernetes Secret arrives.
     ///
@@ -67,12 +64,8 @@ struct Args {
     generate_key_file: Option<PathBuf>,
 
     /// Object-store root for the log-structured metadata store, as
-    /// `s3://bucket/prefix`. Replaces --database-url entirely: no database, no
-    /// migrations, no volume to lose.
-    ///
-    /// Feature-gated rather than accepted-and-ignored on the SQL builds, so
-    /// passing it to a binary that cannot honour it fails loudly instead of
-    /// starting quietly against a database.
+    /// `s3://bucket/prefix`. There is no database, no migrations and no volume
+    /// to lose.
     #[arg(long, default_value = "")]
     storage_root: String,
 
@@ -403,7 +396,7 @@ async fn main() -> anyhow::Result<()> {
 /// `AWS_ENDPOINT_URL` redirects to MinIO, and forces path-style addressing:
 /// virtual-host style would resolve `bucket.minio.svc` as a hostname, which
 /// does not exist in-cluster.
-async fn open_log_store(storage_root: &str) -> anyhow::Result<uc_db::AnyPool> {
+async fn open_log_store(storage_root: &str) -> anyhow::Result<AnyPool> {
     use std::sync::Arc;
 
     let rest = storage_root.strip_prefix("s3://").ok_or_else(|| {
@@ -433,16 +426,8 @@ async fn open_log_store(storage_root: &str) -> anyhow::Result<uc_db::AnyPool> {
         .map_err(|e| anyhow::anyhow!("{e}"))
 }
 
-// ── S3-backed SQLite support ────────────────────────────────────────────────────
 
 
-
-
-
-
-/// Redact the `user:password@` credentials from a database URL before logging.
-/// SQLite URLs have no credentials and pass through unchanged; Postgres/S3
-/// URLs of the form `scheme://user:pass@host/...` have the password masked.
 
 
 

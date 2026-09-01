@@ -47,7 +47,7 @@ pub async fn create(
                 &state,
                 user_val.id,
                 cred.id,
-                uc_types::Privilege::CreateExternalLocation,
+                Privilege::CreateExternalLocation,
             )
             .await?;
         }
@@ -88,7 +88,7 @@ pub async fn list(
         external_location::list(&state.pool, params.page_token.as_deref(), max).await?;
     let mut external_locations = Vec::with_capacity(rows.len());
     for r in rows {
-        let cred_name = uc_db::repos::credential::get_by_id(&state.pool, r.credential_id)
+        let cred_name = credential::get_by_id(&state.pool, r.credential_id)
             .await
             .map(|c| c.name)
             .unwrap_or_default();
@@ -105,7 +105,7 @@ pub async fn get(
     Path(name): Path<String>,
 ) -> Result<Json<ExternalLocationInfo>, UcError> {
     let row = external_location::get_by_name(&state.pool, &name).await?;
-    let cred = uc_db::repos::credential::get_by_id(&state.pool, row.credential_id).await?;
+    let cred = credential::get_by_id(&state.pool, row.credential_id).await?;
     Ok(Json(to_ext_loc_info(row, &cred.name)))
 }
 
@@ -118,14 +118,14 @@ pub async fn update(
     let existing = external_location::get_by_name(&state.pool, &name).await?;
     if state.auth_enabled {
         let user = get_user(&state, &claims.sub).await?;
-        require(&state, user.id, existing.id, uc_types::Privilege::Owner).await?;
+        require(&state, user.id, existing.id, Privilege::Owner).await?;
     }
     let effective_name = req.new_name.as_deref().unwrap_or(&name);
     let now = now_ms();
     // Resolve new credential_id if credential_name is being changed
     let new_cred_id = if let Some(ref cred_name) = req.credential_name {
         Some(
-            uc_db::repos::credential::get_by_name(&state.pool, cred_name)
+            credential::get_by_name(&state.pool, cred_name)
                 .await?
                 .id,
         )
@@ -146,7 +146,7 @@ pub async fn update(
     .await?;
     let updated = external_location::get_by_name(&state.pool, effective_name).await?;
     // Get credential name for response
-    let cred = uc_db::repos::credential::get_by_id(&state.pool, updated.credential_id).await?;
+    let cred = credential::get_by_id(&state.pool, updated.credential_id).await?;
     Ok(Json(to_ext_loc_info(updated, &cred.name)))
 }
 

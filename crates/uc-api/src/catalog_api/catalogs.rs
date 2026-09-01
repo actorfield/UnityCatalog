@@ -292,7 +292,7 @@ pub async fn delete(
 /// Delete all children of a schema (tables, volumes, functions, models) without deleting the schema itself.
 async fn delete_schema_children(
     pool: &uc_db::AnyPool,
-    schema_id: uuid::Uuid,
+    schema_id: Uuid,
 ) -> Result<(), UcError> {
     use uc_db::repos::{function, model, table, volume};
 
@@ -300,7 +300,7 @@ async fn delete_schema_children(
     let (tables, _) = table::list(pool, schema_id, None, 10000).await?;
     for t in tables {
         table::delete_columns(pool, t.id).await?;
-        uc_db::repos::property::delete_for_entity(pool, t.id, "table").await?;
+        property::delete_for_entity(pool, t.id, "table").await?;
         table::delete(pool, t.id).await?;
     }
     // Delete volumes

@@ -113,12 +113,12 @@ pub async fn list_models(
     } else {
         None
     };
-    let visible_ids: std::collections::HashSet<uuid::Uuid> = if state.auth_enabled {
-        crate::catalog_api::helpers::filter_visible(
+    let visible_ids: std::collections::HashSet<Uuid> = if state.auth_enabled {
+        filter_visible(
             &state,
             principal,
             rows.iter().map(|r| (r.id, ())).collect(),
-            uc_types::Privilege::Select,
+            Privilege::Select,
         )
         .await?
         .into_iter()
