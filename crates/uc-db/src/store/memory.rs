@@ -11,6 +11,10 @@ use std::collections::BTreeMap;
 use std::sync::Mutex;
 use uc_errors::UcError;
 
+/// A poisoned lock is recovered rather than propagated. Poisoning means another
+/// thread panicked while holding it; re-panicking here would turn one failure
+/// into a permanently unusable store, and this map has no invariant that a
+/// partial write could break.
 #[derive(Default)]
 pub struct MemoryLog {
     // BTreeMap so `list_after` returns keys in the lexicographic order the log
@@ -25,7 +29,7 @@ impl MemoryLog {
 
     /// Number of stored objects. For tests that assert on log growth.
     pub fn len(&self) -> usize {
-        self.objects.lock().unwrap().len()
+        self.objects.lock().unwrap_or_else(|e| e.into_inner()).len()
     }
 
     pub fn is_empty(&self) -> bool {
@@ -34,14 +38,14 @@ impl MemoryLog {
 
     /// Remove an object, to simulate a hole or a pruned commit.
     pub fn remove(&self, key: &str) -> Option<Vec<u8>> {
-        self.objects.lock().unwrap().remove(key)
+        self.objects.lock().unwrap_or_else(|e| e.into_inner()).remove(key)
     }
 }
 
 #[async_trait::async_trait]
 impl ObjectLog for MemoryLog {
     async fn put_if_absent(&self, key: &str, body: Vec<u8>) -> Result<PutResult, UcError> {
-        let mut o = self.objects.lock().unwrap();
+        let mut o = self.objects.lock().unwrap_or_else(|e| e.into_inner());
         if o.contains_key(key) {
             return Ok(PutResult::AlreadyExists);
         }
@@ -50,14 +54,14 @@ impl ObjectLog for MemoryLog {
     }
 
     async fn get(&self, key: &str) -> Result<Option<Vec<u8>>, UcError> {
-        Ok(self.objects.lock().unwrap().get(key).cloned())
+        Ok(self.objects.lock().unwrap_or_else(|e| e.into_inner()).get(key).cloned())
     }
 
     async fn list_after(&self, prefix: &str, start_after: &str) -> Result<Vec<String>, UcError> {
         Ok(self
             .objects
             .lock()
-            .unwrap()
+            .unwrap_or_else(|e| e.into_inner())
             .keys()
             .filter(|k| k.starts_with(prefix) && k.as_str() > start_after)
             .cloned()
@@ -65,7 +69,7 @@ impl ObjectLog for MemoryLog {
     }
 
     async fn put(&self, key: &str, body: Vec<u8>) -> Result<(), UcError> {
-        self.objects.lock().unwrap().insert(key.to_string(), body);
+        self.objects.lock().unwrap_or_else(|e| e.into_inner()).insert(key.to_string(), body);
         Ok(())
     }
 }

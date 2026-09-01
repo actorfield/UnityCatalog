@@ -77,7 +77,7 @@ pub async fn create_table(
         data_source_format: Some("DELTA".into()),
         comment: None,
         url: req.location.clone(),
-        column_count: req.columns.as_ref().map(|c| c.fields.len() as i32),
+        column_count: req.columns.as_ref().map(|c| i32::try_from(c.fields.len()).unwrap_or(i32::MAX)),
         view_definition: None,
         uniform_iceberg_metadata_location: None,
         uniform_iceberg_converted_delta_version: None,
@@ -229,7 +229,7 @@ pub async fn update_table(
                 table::patch(
                     &state.pool,
                     row.id,
-                    Some(columns.fields.len() as i32),
+                    Some(i32::try_from(columns.fields.len()).unwrap_or(i32::MAX)),
                     None,
                     None,
                     None,

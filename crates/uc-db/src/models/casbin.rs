@@ -20,16 +20,19 @@ pub struct CasbinRule {
 impl CasbinRule {
     /// Build from casbin's `(ptype, rule)` pair, padding to six columns.
     pub fn from_parts(ptype: &str, rule: &[String]) -> Self {
-        let mut v: Vec<String> = rule.to_vec();
-        v.resize(6, String::new());
+        // Padded by iterator rather than `resize` + indexing: a rule longer or
+        // shorter than six columns is then structurally impossible to mishandle
+        // instead of relying on the resize two lines up.
+        let mut v = rule.iter().cloned().chain(std::iter::repeat(String::new()));
+        let mut next = || v.next().unwrap_or_default();
         Self {
             ptype: ptype.to_string(),
-            v0: v[0].clone(),
-            v1: v[1].clone(),
-            v2: v[2].clone(),
-            v3: v[3].clone(),
-            v4: v[4].clone(),
-            v5: v[5].clone(),
+            v0: next(),
+            v1: next(),
+            v2: next(),
+            v3: next(),
+            v4: next(),
+            v5: next(),
         }
     }
 

@@ -1,3 +1,7 @@
+// Tests panic on purpose: unwrap/expect/indexing are the idiom for
+// asserting, and a failed assertion should abort the test.
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::indexing_slicing)]
+
 /// Tests for remaining handlers: temp_credentials, delta_commits, delta credentials,
 /// middleware, error_ext, staging_tables.
 mod common;

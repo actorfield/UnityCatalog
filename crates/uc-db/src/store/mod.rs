@@ -176,7 +176,9 @@ impl Snapshot {
         let mut kinds: Vec<_> = self.entities.keys().copied().collect();
         kinds.sort();
         for kind in kinds {
-            let table = &self.entities[&kind];
+            let Some(table) = self.entities.get(&kind) else {
+                continue;
+            };
             let mut ids: Vec<_> = table.keys().copied().collect();
             ids.sort();
             for id in ids {

@@ -201,6 +201,8 @@ fn build_jwks(km: &KeyManager) -> String {
 
 #[cfg(test)]
 mod tests {
+    // Tests panic on purpose; see the note in the crate-level modules.
+    #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::indexing_slicing)]
     use super::*;
 
     #[test]
@@ -253,6 +255,8 @@ mod tests {
 
 #[cfg(test)]
 mod key_material_tests {
+    // Tests panic on purpose; see the note in the crate-level modules.
+    #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::indexing_slicing)]
     use super::*;
 
     #[test]

@@ -4,6 +4,9 @@
 //! never overwrites — so a backend that quietly lost that property would fail
 //! here rather than in production.
 
+// Tests panic on purpose: unwrap/expect/indexing are the idiom for asserting.
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::indexing_slicing)]
+
 use super::action::{Action, EntityKind};
 use super::log::{ObjectLog, PutResult};
 use super::{natural_key_for, pad_i64};

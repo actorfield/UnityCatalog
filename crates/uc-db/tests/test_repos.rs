@@ -1,3 +1,7 @@
+// Tests panic on purpose: unwrap/expect/indexing are the idiom for
+// asserting, and a failed assertion should abort the test.
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::indexing_slicing)]
+
 //! Integration tests for the uc-db repositories — every repo method directly,
 //! no HTTP layer.
 //!

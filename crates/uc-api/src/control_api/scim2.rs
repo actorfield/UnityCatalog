@@ -73,7 +73,7 @@ pub async fn list_users(
             external_id: r.external_id,
         })
         .collect::<Vec<_>>();
-    let total = resources.len() as i32;
+    let total = i32::try_from(resources.len()).unwrap_or(i32::MAX);
     Ok(Json(UserResourceList {
         resources,
         total_results: total,

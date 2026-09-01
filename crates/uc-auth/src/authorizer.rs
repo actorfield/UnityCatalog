@@ -266,12 +266,18 @@ impl Authorizer for UcAuthorizer {
     ) -> Result<Vec<Privilege>, UcError> {
         let enforcer = self.enforcer.read().await;
         let policies = enforcer.get_policy();
+        // Destructure rather than index: the length check and the accesses were
+        // in separate closures, so nothing structural tied them together.
+        let principal = principal.to_string();
+        let resource = resource.to_string();
         let privs = policies
             .iter()
-            .filter(|p| {
-                p.len() >= 3 && p[0] == principal.to_string() && p[1] == resource.to_string()
+            .filter_map(|p| match p.as_slice() {
+                [subject, object, action, ..] if *subject == principal && *object == resource => {
+                    Privilege::from_casbin_str(action)
+                }
+                _ => None,
             })
-            .filter_map(|p| Privilege::from_casbin_str(&p[2]))
             .collect();
         Ok(privs)
     }
@@ -284,12 +290,16 @@ impl Authorizer for UcAuthorizer {
         let policies = enforcer.get_policy();
         let mut map: std::collections::HashMap<Uuid, Vec<Privilege>> =
             std::collections::HashMap::new();
-        for p in policies
-            .iter()
-            .filter(|p| p.len() >= 3 && p[1] == resource.to_string())
-        {
+        let resource = resource.to_string();
+        for p in policies.iter() {
+            let [subject, object, action, ..] = p.as_slice() else {
+                continue;
+            };
+            if *object != resource {
+                continue;
+            }
             if let (Ok(principal), Some(p_priv)) =
-                (p[0].parse::<Uuid>(), Privilege::from_casbin_str(&p[2]))
+                (subject.parse::<Uuid>(), Privilege::from_casbin_str(action))
             {
                 map.entry(principal).or_default().push(p_priv);
             }
@@ -341,6 +351,8 @@ impl Authorizer for AllowingAuthorizer {
 
 #[cfg(test)]
 mod tests {
+    // Tests panic on purpose; see the note in the crate-level modules.
+    #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::indexing_slicing)]
     use super::*;
 
     // ── AllowingAuthorizer ────────────────────────────────────────────────────

@@ -104,6 +104,8 @@ pub fn staging_table_location(storage_root: &str, schema_id: Uuid, staging_id: U
 
 #[cfg(test)]
 mod tests {
+    // Tests panic on purpose; see the note in the crate-level modules.
+    #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::indexing_slicing)]
     use super::*;
 
     fn fake_catalog(storage_root: Option<&str>) -> CatalogRow {

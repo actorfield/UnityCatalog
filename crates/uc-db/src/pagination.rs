@@ -18,7 +18,7 @@ pub fn page<T>(
     // max_results = 0 — a panic in debug, and in release it wrapped to
     // usize::MAX so `get` returned None and pagination dead-ended with an empty
     // page and no token, which no caller could distinguish from "no more rows".
-    let limit = max_results.max(0) as usize;
+    let limit = usize::try_from(max_results.max(0)).unwrap_or(usize::MAX);
     if limit == 0 {
         return (Vec::new(), None);
     }
@@ -37,11 +37,15 @@ pub fn page<T>(
 /// never hit this (it binds an i64 straight into LIMIT), so it is specific to
 /// the in-memory scans.
 pub fn over_fetch(max_results: i64) -> usize {
-    (max_results.max(0) as usize).saturating_add(1)
+    usize::try_from(max_results.max(0))
+        .unwrap_or(usize::MAX)
+        .saturating_add(1)
 }
 
 #[cfg(test)]
 mod tests {
+    // Tests panic on purpose; see the note in the crate-level modules.
+    #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::indexing_slicing)]
     use super::*;
 
     fn names(n: usize) -> Vec<String> {
@@ -90,7 +94,7 @@ mod tests {
         assert_eq!(over_fetch(i64::MIN), 1);
         // The point is that it neither panics nor wraps to a small number;
         // i64::MAX + 1 fits in a 64-bit usize and only saturates on 32-bit.
-        assert!(over_fetch(i64::MAX) > i64::MAX as usize);
+        assert!(over_fetch(i64::MAX) >= usize::try_from(i64::MAX).unwrap_or(usize::MAX));
     }
 
     #[test]

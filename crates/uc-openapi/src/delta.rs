@@ -394,6 +394,8 @@ pub struct DeltaReportMetricsRequest {
 
 #[cfg(test)]
 mod tests {
+    // Tests panic on purpose; see the note in the crate-level modules.
+    #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::indexing_slicing)]
     use super::*;
 
     #[test]

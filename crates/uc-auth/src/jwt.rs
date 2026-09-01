@@ -121,8 +121,10 @@ pub fn decode_oidc_sub(config: &OidcConfig, token: &str) -> Result<String, UcErr
         validation.validate_exp = true;
         if let Ok(td) = jsonwebtoken::decode::<serde_json::Value>(token, &decoding_key, &validation)
         {
-            let sub = td.claims["sub"]
-                .as_str()
+            let sub = td
+                .claims
+                .get("sub")
+                .and_then(serde_json::Value::as_str)
                 .unwrap_or("oidc-principal")
                 .to_string();
             return Ok(sub);
@@ -136,6 +138,8 @@ pub fn decode_oidc_sub(config: &OidcConfig, token: &str) -> Result<String, UcErr
 
 #[cfg(test)]
 mod tests {
+    // Tests panic on purpose; see the note in the crate-level modules.
+    #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::indexing_slicing)]
     use super::*;
     use crate::keys::KeyManager;
     use base64::engine::general_purpose::URL_SAFE_NO_PAD;

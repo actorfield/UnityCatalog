@@ -77,7 +77,7 @@ pub async fn create(
                     function_id: id,
                     name: p.name.clone(),
                     input_or_return: 0,
-                    ordinal_position: i as i32,
+                    ordinal_position: i32::try_from(i).unwrap_or(i32::MAX),
                     type_text: p.type_text.clone(),
                     type_json: p.type_json.clone(),
                     type_name: p

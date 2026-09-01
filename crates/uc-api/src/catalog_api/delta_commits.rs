@@ -33,13 +33,13 @@ pub async fn get_commits(
     Query(params): Query<GetParams>,
 ) -> Result<Json<GetCommitsResponse>, UcError> {
     let parts: Vec<&str> = params.table_full_name.splitn(3, '.').collect();
-    if parts.len() != 3 {
+    let [catalog_name, schema_name, table_name] = parts.as_slice() else {
         return Err(UcError::invalid_argument(
             "table_full_name must be catalog.schema.table",
         ));
-    }
-    let schema = schema::get_by_full_name(&state.pool, parts[0], parts[1]).await?;
-    let table = table::get_by_schema_and_name(&state.pool, schema.id, parts[2]).await?;
+    };
+    let schema = schema::get_by_full_name(&state.pool, catalog_name, schema_name).await?;
+    let table = table::get_by_schema_and_name(&state.pool, schema.id, table_name).await?;
     let commits = delta::list_for_table(
         &state.pool,
         table.id,
@@ -72,13 +72,13 @@ pub async fn commit(
     Json(req): Json<CommitRequest>,
 ) -> Result<Json<GetCommitsResponse>, UcError> {
     let parts: Vec<&str> = req.table_full_name.splitn(3, '.').collect();
-    if parts.len() != 3 {
+    let [catalog_name, schema_name, table_name] = parts.as_slice() else {
         return Err(UcError::invalid_argument(
             "table_full_name must be catalog.schema.table",
         ));
-    }
-    let schema = schema::get_by_full_name(&state.pool, parts[0], parts[1]).await?;
-    let table = table::get_by_schema_and_name(&state.pool, schema.id, parts[2]).await?;
+    };
+    let schema = schema::get_by_full_name(&state.pool, catalog_name, schema_name).await?;
+    let table = table::get_by_schema_and_name(&state.pool, schema.id, table_name).await?;
 
     let row = DeltaCommitRow {
         id: Uuid::now_v7(),

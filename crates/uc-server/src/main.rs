@@ -465,8 +465,11 @@ async fn fetch_oidc_jwks(issuer: &str) -> anyhow::Result<JwkSet> {
         .await
         .context("OIDC discovery response not valid JSON")?;
 
-    let jwks_uri = discovery["jwks_uri"]
-        .as_str()
+    // The response is whatever the issuer returned; `.get` rather than `[]` so a
+    // non-object body is an error instead of a panic.
+    let jwks_uri = discovery
+        .get("jwks_uri")
+        .and_then(serde_json::Value::as_str)
         .ok_or_else(|| anyhow::anyhow!("OIDC discovery response missing 'jwks_uri'"))?;
 
     let mut jwks_req = client.get(jwks_uri);

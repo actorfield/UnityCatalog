@@ -84,7 +84,15 @@ pub async fn model_version_credentials(
     let schema = schema::get_by_full_name(&state.pool, &req.catalog_name, &req.schema_name).await?;
     let model =
         model::get_model_by_schema_and_name(&state.pool, schema.id, &req.model_name).await?;
-    let version = model::get_version(&state.pool, model.id, req.version as i32).await?;
+    // Model versions are i32 in the store. `as i32` silently wrapped, so a
+    // request for version 4294967301 returned credentials for version 5.
+    let requested = i32::try_from(req.version).map_err(|_| {
+        UcError::new(
+            ErrorCode::InvalidArgument,
+            format!("Model version {} is out of range", req.version),
+        )
+    })?;
+    let version = model::get_version(&state.pool, model.id, requested).await?;
     let url = version.url.or(model.url).unwrap_or_default();
     let ctx = build_ctx(&url, to_internal_op(&req.operation), None, &state).await?;
     Ok(Json(state.credential_vendor.vend(&ctx).await?))

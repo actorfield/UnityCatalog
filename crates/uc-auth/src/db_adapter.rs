@@ -171,10 +171,13 @@ impl Adapter for SqlxAdapter {
                     return false;
                 }
                 let vals = row.values();
-                field_values
-                    .iter()
-                    .enumerate()
-                    .all(|(i, val)| val.is_empty() || vals[field_index + i] == val)
+                // `.get`, not `[]`: field_index and field_values come from
+                // casbin, and nothing constrains field_index + len() to the six
+                // columns. Out of range means the rule has no such field, so it
+                // does not match -- and crucially is not deleted.
+                field_values.iter().enumerate().all(|(i, val)| {
+                    val.is_empty() || vals.get(field_index + i).is_some_and(|v| v == val)
+                })
             })
             .collect();
         // One call for the batch, so on the log store a filtered removal lands
@@ -195,6 +198,8 @@ impl Adapter for SqlxAdapter {
 
 #[cfg(test)]
 mod tests {
+    // Tests panic on purpose; see the note in the crate-level modules.
+    #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::indexing_slicing)]
 
     use crate::{Authorizer, UcAuthorizer};
     use uc_db::AnyPool;

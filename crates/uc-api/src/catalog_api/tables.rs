@@ -111,7 +111,7 @@ pub async fn create(
         }
     };
 
-    let col_count = req.columns.as_ref().map(|c| c.len() as i32);
+    let col_count = req.columns.as_ref().map(|c| i32::try_from(c.len()).unwrap_or(i32::MAX));
     let row = TableRow {
         id,
         schema_id: schema.id,
@@ -144,7 +144,7 @@ pub async fn create(
                 id: Uuid::now_v7(),
                 table_id: id,
                 name: c.name.clone(),
-                ordinal_position: i as i32,
+                ordinal_position: i32::try_from(i).unwrap_or(i32::MAX),
                 type_text: c.type_text.clone().unwrap_or_default(),
                 // #1053: derive type_json from type_text if absent
                 type_json: c.type_json.clone().unwrap_or_else(|| {

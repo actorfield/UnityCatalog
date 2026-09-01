@@ -26,13 +26,17 @@ unreachable_pub = "warn"
 
 [workspace.lints.clippy]
 all = { level = "warn", priority = -1 }
+# Silent truncation is a bug class this codebase has already been bitten by
+# (a page limit wrapping through usize), so casts are checked rather than
+# trusted.
+cast_possible_truncation = "warn"
+cast_sign_loss = "warn"
+cast_possible_wrap = "warn"
 
-# Reviewed and left off, not overlooked:
-#   cast_possible_truncation / cast_sign_loss — 14 sites, all benign (column
-#     counts, page limits already guarded by pagination::page). Turning them on
-#     needs an annotation at each; worth doing, but as its own cleanup.
-#   unwrap_used / expect_used / panic — ~500 hits, almost entirely in tests,
-#     where they are the idiom.
+unwrap_used = "warn"
+expect_used = "warn"
+panic = "warn"
+indexing_slicing = "warn"
 
 [workspace.dependencies]
 axum = { version = "0.7", features = ["macros"] }
