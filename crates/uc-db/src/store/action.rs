@@ -58,8 +58,10 @@ pub struct CommitInfo {
     pub timestamp: i64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub operation: Option<String>,
+    /// Who made the change. See `store::actor::Actor` for why it carries both
+    /// a stable id and the address as it was.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub actor: Option<String>,
+    pub actor: Option<super::actor::Actor>,
 }
 
 /// One line of a commit file.

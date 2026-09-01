@@ -358,7 +358,7 @@ async fn oidc_bearer_accepted_when_configured() {
     let secret = b"oidc-middleware-test-secret-32bytes!";
     let issuer = "https://kubernetes.default.svc";
     let oidc = hs_oidc_config(secret, issuer);
-    let app = build_auth_test_app(Some(oidc)).await;
+    let (app, _log) = build_auth_test_app(Some(oidc)).await;
     let token = hs_bearer(
         secret,
         issuer,
@@ -374,7 +374,7 @@ async fn oidc_bearer_accepted_when_configured() {
 async fn oidc_wrong_issuer_rejected_by_middleware() {
     let secret = b"oidc-middleware-test-secret-32bytes!";
     let oidc = hs_oidc_config(secret, "https://kubernetes.default.svc");
-    let app = build_auth_test_app(Some(oidc)).await;
+    let (app, _log) = build_auth_test_app(Some(oidc)).await;
     // Token issued by a different issuer
     let token = hs_bearer(secret, "https://attacker.example.com", "attacker", 3600);
     let (s, _) = get_bearer(&app, &format!("{UC}/catalogs"), &token).await;
@@ -383,7 +383,7 @@ async fn oidc_wrong_issuer_rejected_by_middleware() {
 
 #[tokio::test]
 async fn no_token_rejected_when_auth_enabled() {
-    let app = build_auth_test_app(None).await;
+    let (app, _log) = build_auth_test_app(None).await;
     let (s, _) = get(&app, &format!("{UC}/catalogs")).await;
     assert_eq!(s, StatusCode::UNAUTHORIZED);
 }
@@ -393,8 +393,62 @@ async fn oidc_expired_token_rejected_by_middleware() {
     let secret = b"oidc-middleware-test-secret-32bytes!";
     let issuer = "https://kubernetes.default.svc";
     let oidc = hs_oidc_config(secret, issuer);
-    let app = build_auth_test_app(Some(oidc)).await;
+    let (app, _log) = build_auth_test_app(Some(oidc)).await;
     let token = hs_bearer(secret, issuer, "sa-cp-demo", -300); // expired 5 min ago, outside 60s leeway
     let (s, _) = get_bearer(&app, &format!("{UC}/catalogs"), &token).await;
     assert_eq!(s, StatusCode::UNAUTHORIZED);
+}
+
+// ── audit: who made the change ───────────────────────────────────────────────
+
+/// End to end: a real bearer token through the middleware, and the commit in
+/// the log names the caller. This is the wiring that gives deletes and grants
+/// an actor — they have no `*_by` column, so the commit has to carry it.
+#[tokio::test]
+async fn a_request_records_its_caller_on_the_commit() {
+    use uc_db::store::action;
+    use uc_db::store::log::ObjectLog;
+
+    let secret = b"oidc-middleware-test-secret-32bytes!";
+    let issuer = "https://kubernetes.default.svc";
+    let (app, log) = build_auth_test_app(Some(hs_oidc_config(secret, issuer))).await;
+
+    let caller = "system:serviceaccount:example:sa-auditor";
+    let token = hs_bearer(secret, issuer, caller, 3600);
+
+    let before = log.len();
+    let (s, _) = post_bearer(
+        &app,
+        &format!("{UC}/catalogs"),
+        &token,
+        serde_json::json!({ "name": "audited" }),
+    )
+    .await;
+    assert_eq!(s, StatusCode::OK);
+    assert!(log.len() > before, "the create must have committed");
+
+    // Find the newest commit and read who made it.
+    let all = ObjectLog::list_after(log.as_ref(), "_uc_log/", "")
+        .await
+        .unwrap();
+    let (_, newest) = all
+        .iter()
+        .filter_map(|k| action::version_from_key(k).map(|v| (v, k.clone())))
+        .max_by_key(|(v, _)| *v)
+        .expect("a commit exists");
+    let bytes = ObjectLog::get(log.as_ref(), &newest)
+        .await
+        .unwrap()
+        .expect("commit readable");
+    let (info, _) = action::decode_commit(&newest, &bytes).unwrap();
+
+    let actor = info.actor.expect("the commit records an actor");
+    assert_eq!(
+        actor.name, caller,
+        "the recorded name is the caller's identity, captured at commit time"
+    );
+    assert!(
+        actor.id.is_some(),
+        "and a stable id, so a later rename cannot re-attribute this action"
+    );
 }

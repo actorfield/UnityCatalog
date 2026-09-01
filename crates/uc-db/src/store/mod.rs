@@ -5,6 +5,7 @@
 //! the ~262 call sites in uc-api compile untouched.
 
 pub mod action;
+pub mod actor;
 pub mod delta_log;
 pub mod log;
 pub mod memory;
@@ -346,7 +347,7 @@ impl StoreInner {
                 format: action::FORMAT_VERSION,
                 timestamp: chrono::Utc::now().timestamp_millis(),
                 operation: Some(operation.to_string()),
-                actor: None,
+                actor: actor::current(),
             };
             let body = action::encode_commit(&info, &actions)?;
 

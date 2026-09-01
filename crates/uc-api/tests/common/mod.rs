@@ -133,8 +133,14 @@ pub const DELTA: &str = "/delta/v1";
 
 /// Build a test app with auth ENABLED and an optional OIDC config.
 /// Uses AllowingAuthorizer so permission checks always pass.
-pub async fn build_auth_test_app(oidc_config: Option<Arc<OidcConfig>>) -> Router {
-    let pool = AnyPool::open(Arc::new(MemoryLog::new()))
+/// Returns the router alongside the underlying log, so a test can read back
+/// what was actually committed — the actor on each commit, for instance, which
+/// is not visible through the API.
+pub async fn build_auth_test_app(
+    oidc_config: Option<Arc<OidcConfig>>,
+) -> (Router, Arc<MemoryLog>) {
+    let log = Arc::new(MemoryLog::new());
+    let pool = AnyPool::open(log.clone())
         .await
         .expect("in-memory log store");
 
@@ -155,7 +161,7 @@ pub async fn build_auth_test_app(oidc_config: Option<Arc<OidcConfig>>) -> Router
         oidc_config,
     );
 
-    Router::new()
+    let router = Router::new()
         .merge(catalog_api::router(state.clone()))
         .merge(control_api::router(state.clone()))
         .merge(delta_api::router(state.clone()))
@@ -163,10 +169,31 @@ pub async fn build_auth_test_app(oidc_config: Option<Arc<OidcConfig>>) -> Router
         .layer(axum::middleware::from_fn_with_state(
             state.clone(),
             auth_middleware,
-        ))
+        ));
+    (router, log)
 }
 
 /// Send a GET with an explicit Authorization: Bearer header.
+pub async fn post_bearer(
+    app: &Router,
+    uri: &str,
+    token: &str,
+    body: Value,
+) -> (StatusCode, Value) {
+    let req = Request::builder()
+        .method("POST")
+        .uri(uri)
+        .header(header::CONTENT_TYPE, "application/json")
+        .header(header::AUTHORIZATION, format!("Bearer {token}"))
+        .body(Body::from(serde_json::to_vec(&body).unwrap()))
+        .unwrap();
+    let res = app.clone().oneshot(req).await.unwrap();
+    let status = res.status();
+    let bytes = to_bytes(res.into_body(), usize::MAX).await.unwrap();
+    let json: Value = serde_json::from_slice(&bytes).unwrap_or(Value::Null);
+    (status, json)
+}
+
 pub async fn get_bearer(app: &Router, uri: &str, token: &str) -> (StatusCode, Value) {
     let req = Request::builder()
         .uri(uri)

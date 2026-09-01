@@ -6,16 +6,15 @@ use axum::{
 use std::sync::Arc;
 use uc_auth::{decode_oidc_sub, UcClaims};
 use uc_db::repos::user;
+use uc_db::store::actor::{self as actor_scope, Actor};
 use uc_errors::{error_into_response, ErrorFormat, UcError};
 use uc_types::TokenType;
 
 use crate::state::AppState;
 
-/// Paths that bypass JWT authentication.
-const AUTH_BYPASS_PATHS: &[&str] = &[
-    "/api/1.0/unity-control/auth/tokens",
-    "/.well-known/jwks.json",
-];
+/// Paths that bypass JWT authentication. Empty since UC stopped issuing tokens:
+/// the exchange and JWKS endpoints it used to exempt no longer exist.
+const AUTH_BYPASS_PATHS: &[&str] = &[];
 
 /// JWT auth middleware: extracts Bearer token, validates it, checks user state,
 /// and inserts Arc<UcClaims> into request extensions.
@@ -68,17 +67,25 @@ pub async fn auth_middleware(
     // Each external `sub` resolves to its own lazily-created, zero-grant
     // uc_users row, so distinct identities (one per K8s ServiceAccount, say)
     // are not collapsed into a single shared principal.
-    let claims = match decode_oidc_sub(oidc, &token) {
+    let (claims, actor) = match decode_oidc_sub(oidc, &token) {
         Ok(sub) => match user::find_or_create_by_external_id(&state.pool, &sub).await {
-            Ok(row) => UcClaims {
-                sub: row
+            Ok(row) => {
+                let name = row
                     .email
-                    .unwrap_or_else(|| row.external_id.clone().unwrap_or(sub)),
-                iss: oidc.issuer.clone(),
-                iat: chrono::Utc::now().timestamp(),
-                jti: uuid::Uuid::now_v7().to_string(),
-                token_type: TokenType::Service,
-            },
+                    .clone()
+                    .unwrap_or_else(|| row.external_id.clone().unwrap_or_else(|| sub.clone()));
+                let actor = Actor::new(Some(row.id), name.clone());
+                (
+                    UcClaims {
+                        sub: name,
+                        iss: oidc.issuer.clone(),
+                        iat: chrono::Utc::now().timestamp(),
+                        jti: uuid::Uuid::now_v7().to_string(),
+                        token_type: TokenType::Service,
+                    },
+                    actor,
+                )
+            }
             Err(e) => return error_into_response(e, ErrorFormat::Catalog),
         },
         Err(e) => return error_into_response(e, ErrorFormat::Catalog),
@@ -101,7 +108,10 @@ pub async fn auth_middleware(
     }
 
     req.extensions_mut().insert(Arc::new(claims));
-    next.run(req).await
+    // Every commit made while handling this request records who made it. This
+    // is what gives deletes and grants an actor: they have no *_by column to
+    // carry one, so the commit itself has to.
+    actor_scope::scope(Some(actor), next.run(req)).await
 }
 
 fn extract_token(req: &Request) -> Option<String> {

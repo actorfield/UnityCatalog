@@ -894,3 +894,151 @@ async fn refreshing_repeatedly_is_harmless() {
     assert_eq!(snap.version, 1, "a no-op refresh must not advance the version");
     assert_eq!(snap.scan(EntityKind::Catalog, None, 10).len(), 1);
 }
+
+// ── who made the change ─────────────────────────────────────────────────────
+
+use super::action::CommitInfo;
+use super::actor::{self, Actor};
+
+/// Read the commitInfo line of a commit straight from the log.
+async fn commit_info(log: &MemLog, version: u64) -> CommitInfo {
+    let key = action::commit_key(version);
+    let bytes = log.get(&key).await.unwrap().expect("commit exists");
+    let (info, _) = action::decode_commit(&key, &bytes).unwrap();
+    info
+}
+
+#[tokio::test]
+async fn a_commit_records_the_actor_in_scope() {
+    let log = Arc::new(MemLog::default());
+    let store = Store::open(log.clone()).await.unwrap();
+    let id = Uuid::now_v7();
+
+    actor::scope(Some(Actor::new(Some(id), "alice@corp.example")), async {
+        put_catalog(&store, "alpha").await.unwrap();
+    })
+    .await;
+
+    let who = commit_info(&log, 1).await.actor.expect("actor recorded");
+    assert_eq!(who.id, Some(id));
+    assert_eq!(who.name, "alice@corp.example");
+}
+
+/// The point of putting the actor on commitInfo rather than on the row: a
+/// delete has no surviving `*_by` column, so without this "who dropped this
+/// table" is unanswerable.
+#[tokio::test]
+async fn a_delete_records_who_did_it() {
+    use crate::repos::catalog;
+
+    let log = Arc::new(MemLog::default());
+    let store = Store::open(log.clone()).await.unwrap();
+
+    // A real row, not the minimal fixture: delete deserialises it.
+    actor::scope(Some(Actor::new(None, "creator@corp.example")), async {
+        catalog::create(
+            &store,
+            Uuid::now_v7(),
+            "doomed",
+            None,
+            None,
+            None,
+            None,
+            0,
+        )
+        .await
+        .unwrap();
+    })
+    .await;
+    actor::scope(Some(Actor::new(None, "deleter@corp.example")), async {
+        catalog::delete(&store, "doomed").await.unwrap();
+    })
+    .await;
+
+    assert_eq!(
+        commit_info(&log, 2).await.actor.expect("actor").name,
+        "deleter@corp.example",
+        "the removal must name the person who removed it, not the creator"
+    );
+    // And the row itself is gone, so nothing else could have carried it.
+    assert!(store
+        .snapshot()
+        .await
+        .get_by_natural_key(EntityKind::Catalog, "doomed")
+        .is_none());
+}
+
+/// Grants are the other case with no column to carry an actor: CasbinRule is
+/// ptype + v0..v5 and nothing else.
+#[tokio::test]
+async fn a_grant_records_who_granted_it() {
+    use crate::models::casbin::CasbinRule;
+    use crate::repos::casbin;
+
+    let log = Arc::new(MemLog::default());
+    let store = Store::open(log.clone()).await.unwrap();
+    let rule = CasbinRule::from_parts("p", &["alice".into(), "table1".into(), "SELECT".into()]);
+
+    actor::scope(Some(Actor::new(None, "admin@corp.example")), async {
+        assert!(casbin::insert(&store, &rule).await.unwrap());
+    })
+    .await;
+
+    assert_eq!(
+        commit_info(&log, 1).await.actor.expect("actor").name,
+        "admin@corp.example"
+    );
+}
+
+/// Startup work is performed by no user, and says so rather than inventing one.
+#[tokio::test]
+async fn a_commit_outside_a_request_records_no_actor() {
+    let log = Arc::new(MemLog::default());
+    let store = Store::open(log.clone()).await.unwrap();
+    put_catalog(&store, "startup").await.unwrap();
+    assert!(commit_info(&log, 1).await.actor.is_none());
+}
+
+#[tokio::test]
+async fn the_actor_does_not_leak_between_scopes() {
+    let log = Arc::new(MemLog::default());
+    let store = Store::open(log.clone()).await.unwrap();
+
+    actor::scope(Some(Actor::new(None, "first@corp.example")), async {
+        put_catalog(&store, "a").await.unwrap();
+    })
+    .await;
+    put_catalog(&store, "b").await.unwrap();
+    actor::scope(Some(Actor::new(None, "second@corp.example")), async {
+        put_catalog(&store, "c").await.unwrap();
+    })
+    .await;
+
+    assert_eq!(commit_info(&log, 1).await.actor.unwrap().name, "first@corp.example");
+    assert!(commit_info(&log, 2).await.actor.is_none());
+    assert_eq!(commit_info(&log, 3).await.actor.unwrap().name, "second@corp.example");
+}
+
+/// The actor is captured at commit time, so a later rename does not re-attribute
+/// a past action — the reason the record carries the address and not just the id.
+#[tokio::test]
+async fn the_recorded_name_is_the_one_from_when_it_happened() {
+    let log = Arc::new(MemLog::default());
+    let store = Store::open(log.clone()).await.unwrap();
+    let id = Uuid::now_v7();
+
+    actor::scope(Some(Actor::new(Some(id), "alice@old-corp.example")), async {
+        put_catalog(&store, "before").await.unwrap();
+    })
+    .await;
+    actor::scope(Some(Actor::new(Some(id), "alice@new-corp.example")), async {
+        put_catalog(&store, "after").await.unwrap();
+    })
+    .await;
+
+    let first = commit_info(&log, 1).await.actor.unwrap();
+    let second = commit_info(&log, 2).await.actor.unwrap();
+    assert_eq!(first.id, second.id, "same person");
+    assert_eq!(first.name, "alice@old-corp.example");
+    assert_eq!(second.name, "alice@new-corp.example");
+}
