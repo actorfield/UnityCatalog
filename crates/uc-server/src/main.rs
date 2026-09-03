@@ -1,11 +1,7 @@
 use anyhow::Context;
 use axum::Router;
 use clap::Parser;
-use std::{
-    net::SocketAddr,
-    path::PathBuf,
-    sync::Arc,
-};
+use std::{net::SocketAddr, path::PathBuf, sync::Arc};
 mod telemetry;
 
 use tracing::info;
@@ -159,7 +155,11 @@ async fn main() -> anyhow::Result<()> {
     info!("Metadata:   {}", args.storage_root);
     info!(
         "Auth:       {}",
-        if args.oidc_issuer.is_some() { "enabled" } else { "disabled" }
+        if args.oidc_issuer.is_some() {
+            "enabled"
+        } else {
+            "disabled"
+        }
     );
 
     // ── 1. Store ──────────────────────────────────────────────────────────────
@@ -406,11 +406,6 @@ async fn open_log_store(storage_root: &str) -> anyhow::Result<AnyPool> {
         .await
         .map_err(|e| anyhow::anyhow!("{e}"))
 }
-
-
-
-
-
 
 // ── OIDC JWKS discovery ───────────────────────────────────────────────────────
 

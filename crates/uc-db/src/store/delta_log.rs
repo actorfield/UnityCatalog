@@ -72,12 +72,7 @@ impl DeltaLog {
     /// Append one commit. The version is the caller's, not ours: Delta clients
     /// decide which version they are committing, and racing them is the whole
     /// point of optimistic concurrency.
-    pub async fn append(
-        &self,
-        table_id: Uuid,
-        version: i64,
-        body: Vec<u8>,
-    ) -> Result<(), UcError> {
+    pub async fn append(&self, table_id: Uuid, version: i64, body: Vec<u8>) -> Result<(), UcError> {
         match self
             .log
             .put_if_absent(&commit_key(table_id, version), body)
@@ -164,12 +159,21 @@ impl DeltaLog {
             return Ok(());
         };
         let mut doc: serde_json::Value = serde_json::from_slice(&bytes).map_err(|e| {
-            UcError::new(ErrorCode::Internal, format!("corrupt delta commit {key}: {e}"))
+            UcError::new(
+                ErrorCode::Internal,
+                format!("corrupt delta commit {key}: {e}"),
+            )
         })?;
 
-        let before = (doc.get("table_id").cloned(), doc.get("commit_version").cloned());
+        let before = (
+            doc.get("table_id").cloned(),
+            doc.get("commit_version").cloned(),
+        );
         edit(&mut doc);
-        let after = (doc.get("table_id").cloned(), doc.get("commit_version").cloned());
+        let after = (
+            doc.get("table_id").cloned(),
+            doc.get("commit_version").cloned(),
+        );
         if before != after {
             return Err(UcError::new(
                 ErrorCode::Internal,

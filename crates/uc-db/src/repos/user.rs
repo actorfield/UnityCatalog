@@ -61,7 +61,11 @@ pub async fn create(
             let body = serde_json::to_value(&row)
                 .map_err(|e| UcError::new(ErrorCode::Internal, e.to_string()))?;
             Ok((
-                vec![Action::Upsert { kind: EntityKind::User, id, body }],
+                vec![Action::Upsert {
+                    kind: EntityKind::User,
+                    id,
+                    body,
+                }],
                 row.clone(),
             ))
         })
@@ -106,9 +110,9 @@ pub async fn find_or_create_by_external_id(
     let now = chrono::Utc::now().timestamp_millis();
     store
         .commit("FIND OR CREATE USER", |snap| {
-            if let Some(existing) = first_where(snap, |u| {
-                u.external_id.as_deref() == Some(external_id)
-            })? {
+            if let Some(existing) =
+                first_where(snap, |u| u.external_id.as_deref() == Some(external_id))?
+            {
                 return Ok((vec![], existing));
             }
             // Matches the SQL's construction: name and external_id both take
@@ -126,7 +130,11 @@ pub async fn find_or_create_by_external_id(
             let body = serde_json::to_value(&row)
                 .map_err(|e| UcError::new(ErrorCode::Internal, e.to_string()))?;
             Ok((
-                vec![Action::Upsert { kind: EntityKind::User, id: row.id, body }],
+                vec![Action::Upsert {
+                    kind: EntityKind::User,
+                    id: row.id,
+                    body,
+                }],
                 row,
             ))
         })
@@ -139,10 +147,13 @@ pub async fn list(
     max_results: i64,
 ) -> Result<(Vec<UserRow>, Option<String>), UcError> {
     let snap = store.snapshot().await;
-    let found = snap.scan(EntityKind::User, page_token, crate::pagination::over_fetch(max_results));
+    let found = snap.scan(
+        EntityKind::User,
+        page_token,
+        crate::pagination::over_fetch(max_results),
+    );
     let rows: Vec<UserRow> = found.into_iter().map(row_of).collect::<Result<_, _>>()?;
-    let (rows, next) =
-        crate::pagination::page(rows, max_results, |r| r.name.clone());
+    let (rows, next) = crate::pagination::page(rows, max_results, |r| r.name.clone());
     Ok((rows, next))
 }
 
@@ -162,8 +173,7 @@ pub async fn update(
             let mut row = row_of(current)?;
 
             if let Some(target) = name {
-                if target != row.name
-                    && snap.get_by_natural_key(EntityKind::User, target).is_some()
+                if target != row.name && snap.get_by_natural_key(EntityKind::User, target).is_some()
                 {
                     return Err(UcError::new(
                         ErrorCode::ResourceAlreadyExists,
@@ -183,7 +193,14 @@ pub async fn update(
 
             let body = serde_json::to_value(&row)
                 .map_err(|e| UcError::new(ErrorCode::Internal, e.to_string()))?;
-            Ok((vec![Action::Upsert { kind: EntityKind::User, id, body }], row))
+            Ok((
+                vec![Action::Upsert {
+                    kind: EntityKind::User,
+                    id,
+                    body,
+                }],
+                row,
+            ))
         })
         .await
 }
@@ -197,7 +214,13 @@ pub async fn delete(store: &Store, id: Uuid) -> Result<(), UcError> {
                     format!("User '{}' not found", id),
                 ));
             }
-            Ok((vec![Action::Remove { kind: EntityKind::User, id }], ()))
+            Ok((
+                vec![Action::Remove {
+                    kind: EntityKind::User,
+                    id,
+                }],
+                (),
+            ))
         })
         .await
 }

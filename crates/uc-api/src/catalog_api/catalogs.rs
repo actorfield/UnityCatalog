@@ -107,7 +107,11 @@ pub async fn list(
 ) -> Result<Json<ListCatalogsResponse>, UcError> {
     // A non-positive max_results means "unspecified", not "an empty page". It
     // used to reach the repo layer and underflow there.
-    let max = params.max_results.filter(|n| *n > 0).unwrap_or(50).min(1000);
+    let max = params
+        .max_results
+        .filter(|n| *n > 0)
+        .unwrap_or(50)
+        .min(1000);
     let (rows, next_token) = catalog::list(&state.pool, params.page_token.as_deref(), max).await?;
 
     let catalogs = rows
@@ -290,10 +294,7 @@ pub async fn delete(
 }
 
 /// Delete all children of a schema (tables, volumes, functions, models) without deleting the schema itself.
-async fn delete_schema_children(
-    pool: &uc_db::AnyPool,
-    schema_id: Uuid,
-) -> Result<(), UcError> {
+async fn delete_schema_children(pool: &uc_db::AnyPool, schema_id: Uuid) -> Result<(), UcError> {
     use uc_db::repos::{function, model, table, volume};
 
     // Delete tables (with columns and properties)

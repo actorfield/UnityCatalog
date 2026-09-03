@@ -77,7 +77,10 @@ pub async fn create_table(
         data_source_format: Some("DELTA".into()),
         comment: None,
         url: req.location.clone(),
-        column_count: req.columns.as_ref().map(|c| i32::try_from(c.fields.len()).unwrap_or(i32::MAX)),
+        column_count: req
+            .columns
+            .as_ref()
+            .map(|c| i32::try_from(c.fields.len()).unwrap_or(i32::MAX)),
         view_definition: None,
         uniform_iceberg_metadata_location: None,
         uniform_iceberg_converted_delta_version: None,
@@ -305,8 +308,12 @@ pub async fn update_table(
                 latest_published_version,
             } => {
                 // Mark the commit at this version as the backfilled latest
-                uc_db::repos::delta::mark_backfilled(&state.pool, row.id, *latest_published_version)
-                    .await?;
+                uc_db::repos::delta::mark_backfilled(
+                    &state.pool,
+                    row.id,
+                    *latest_published_version,
+                )
+                .await?;
             }
             DeltaTableUpdate::UpdateMetadataSnapshotVersion {
                 last_commit_version,

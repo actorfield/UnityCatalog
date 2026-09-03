@@ -55,7 +55,11 @@ pub async fn create(
             let body = serde_json::to_value(&row)
                 .map_err(|e| UcError::new(ErrorCode::Internal, e.to_string()))?;
             Ok((
-                vec![Action::Upsert { kind: EntityKind::Catalog, id, body }],
+                vec![Action::Upsert {
+                    kind: EntityKind::Catalog,
+                    id,
+                    body,
+                }],
                 row.clone(),
             ))
         })
@@ -96,7 +100,11 @@ pub async fn list(
     max_results: i64,
 ) -> Result<(Vec<CatalogRow>, Option<String>), UcError> {
     let snap = store.snapshot().await;
-    let found = snap.scan(EntityKind::Catalog, page_token, crate::pagination::over_fetch(max_results));
+    let found = snap.scan(
+        EntityKind::Catalog,
+        page_token,
+        crate::pagination::over_fetch(max_results),
+    );
     let rows: Vec<CatalogRow> = found.into_iter().map(row_of).collect::<Result<_, _>>()?;
 
     let (rows, next_token) = crate::pagination::page(rows, max_results, |r| r.name.clone());
@@ -130,7 +138,11 @@ pub async fn update(
             // so this returns the domain error -- calling it out because it is
             // a deliberate behaviour change, not an accident of the port.
             if let Some(target) = new_name {
-                if target != name && snap.get_by_natural_key(EntityKind::Catalog, target).is_some() {
+                if target != name
+                    && snap
+                        .get_by_natural_key(EntityKind::Catalog, target)
+                        .is_some()
+                {
                     return Err(UcError::new(
                         ErrorCode::CatalogAlreadyExists,
                         format!("Catalog '{}' already exists", target),
@@ -151,7 +163,11 @@ pub async fn update(
             let body = serde_json::to_value(&row)
                 .map_err(|e| UcError::new(ErrorCode::Internal, e.to_string()))?;
             Ok((
-                vec![Action::Upsert { kind: EntityKind::Catalog, id: row.id, body }],
+                vec![Action::Upsert {
+                    kind: EntityKind::Catalog,
+                    id: row.id,
+                    body,
+                }],
                 row,
             ))
         })
@@ -175,7 +191,10 @@ pub async fn delete(store: &Store, name: &str) -> Result<(), UcError> {
             // Adding cascade here would be a behaviour change disguised as a
             // port. See docs/log-structured-metadata.md.
             Ok((
-                vec![Action::Remove { kind: EntityKind::Catalog, id: row.id }],
+                vec![Action::Remove {
+                    kind: EntityKind::Catalog,
+                    id: row.id,
+                }],
                 (),
             ))
         })

@@ -1,6 +1,11 @@
 // Tests panic on purpose: unwrap/expect/indexing are the idiom for
 // asserting, and a failed assertion should abort the test.
-#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::indexing_slicing)]
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::indexing_slicing
+)]
 
 /// Unit tests for pure logic functions in uc-api (no DB, no HTTP).
 /// Tests helpers.rs: split2, split3, validate_sql_name, now_ms

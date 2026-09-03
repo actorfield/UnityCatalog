@@ -5,12 +5,17 @@
 //! here rather than in production.
 
 // Tests panic on purpose: unwrap/expect/indexing are the idiom for asserting.
-#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::indexing_slicing)]
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::indexing_slicing
+)]
 
 use super::action::{Action, EntityKind};
 use super::log::{ObjectLog, PutResult};
-use super::{natural_key_for, pad_i64};
 use super::*;
+use super::{natural_key_for, pad_i64};
 
 use super::memory::MemoryLog as MemLog;
 use put_catalog_helper as put_catalog;
@@ -53,8 +58,12 @@ async fn commits_replay_into_an_equivalent_snapshot() {
     let replica = Store::open(log).await.unwrap();
     let snap = replica.snapshot().await;
     assert_eq!(snap.version, 2);
-    assert!(snap.get_by_natural_key(EntityKind::Catalog, "alpha").is_some());
-    assert!(snap.get_by_natural_key(EntityKind::Catalog, "beta").is_some());
+    assert!(snap
+        .get_by_natural_key(EntityKind::Catalog, "alpha")
+        .is_some());
+    assert!(snap
+        .get_by_natural_key(EntityKind::Catalog, "beta")
+        .is_some());
 }
 
 #[tokio::test]
@@ -78,8 +87,16 @@ async fn a_lost_race_re_evaluates_the_precondition_instead_of_retrying_blind() {
     let b = Store::open(log.clone()).await.unwrap();
 
     // Both replicas currently believe "shared" is free.
-    assert!(a.snapshot().await.get_by_natural_key(EntityKind::Catalog, "shared").is_none());
-    assert!(b.snapshot().await.get_by_natural_key(EntityKind::Catalog, "shared").is_none());
+    assert!(a
+        .snapshot()
+        .await
+        .get_by_natural_key(EntityKind::Catalog, "shared")
+        .is_none());
+    assert!(b
+        .snapshot()
+        .await
+        .get_by_natural_key(EntityKind::Catalog, "shared")
+        .is_none());
 
     b.put_catalog_for_test("shared").await.unwrap();
 
@@ -109,8 +126,12 @@ async fn a_lost_race_with_a_still_valid_precondition_retries_onto_the_next_versi
     let cold = Store::open(log).await.unwrap();
     let snap = cold.snapshot().await;
     assert_eq!(snap.version, 2, "both commits landed");
-    assert!(snap.get_by_natural_key(EntityKind::Catalog, "alpha").is_some());
-    assert!(snap.get_by_natural_key(EntityKind::Catalog, "beta").is_some());
+    assert!(snap
+        .get_by_natural_key(EntityKind::Catalog, "alpha")
+        .is_some());
+    assert!(snap
+        .get_by_natural_key(EntityKind::Catalog, "beta")
+        .is_some());
 }
 
 #[tokio::test]
@@ -135,10 +156,13 @@ async fn rename_frees_the_old_natural_key() {
 
     let snap = store.snapshot().await;
     assert!(
-        snap.get_by_natural_key(EntityKind::Catalog, "before").is_none(),
+        snap.get_by_natural_key(EntityKind::Catalog, "before")
+            .is_none(),
         "the old name must not stay reachable"
     );
-    assert!(snap.get_by_natural_key(EntityKind::Catalog, "after").is_some());
+    assert!(snap
+        .get_by_natural_key(EntityKind::Catalog, "after")
+        .is_some());
 }
 
 #[tokio::test]
@@ -165,7 +189,10 @@ async fn scan_is_ordered_and_exclusive_of_the_page_token() {
         vec!["charlie", "delta"],
         "page token is exclusive, matching WHERE name > $1"
     );
-    assert_eq!(names(snap.scan(EntityKind::Catalog, None, 2)), vec!["alpha", "bravo"]);
+    assert_eq!(
+        names(snap.scan(EntityKind::Catalog, None, 2)),
+        vec!["alpha", "bravo"]
+    );
 }
 
 #[tokio::test]
@@ -180,7 +207,9 @@ async fn checkpoint_round_trips_and_is_byte_reproducible() {
 
     let body = log.get(&action::checkpoint_key(3)).await.unwrap().unwrap();
     let rebuilt = Snapshot::decode_checkpoint(&body).unwrap();
-    assert!(rebuilt.get_by_natural_key(EntityKind::Catalog, "gamma").is_some());
+    assert!(rebuilt
+        .get_by_natural_key(EntityKind::Catalog, "gamma")
+        .is_some());
 
     // Deterministic ordering: re-encoding the rebuilt snapshot yields the same
     // bytes, which is what makes _last_checkpoint.size a usable truncation guard.
@@ -200,8 +229,12 @@ async fn replay_prefers_the_checkpoint_and_still_applies_later_commits() {
     let cold = Store::open(log).await.unwrap();
     let snap = cold.snapshot().await;
     assert_eq!(snap.version, 2);
-    assert!(snap.get_by_natural_key(EntityKind::Catalog, "alpha").is_some());
-    assert!(snap.get_by_natural_key(EntityKind::Catalog, "beta").is_some());
+    assert!(snap
+        .get_by_natural_key(EntityKind::Catalog, "alpha")
+        .is_some());
+    assert!(snap
+        .get_by_natural_key(EntityKind::Catalog, "beta")
+        .is_some());
 }
 
 #[tokio::test]
@@ -214,7 +247,12 @@ async fn a_dangling_checkpoint_pointer_falls_back_to_a_full_scan() {
     // Pointer to a checkpoint that was never written.
     log.put(
         action::LAST_CHECKPOINT_KEY,
-        serde_json::to_vec(&LastCheckpoint { version: 2, size: 2, checksum: None }).unwrap(),
+        serde_json::to_vec(&LastCheckpoint {
+            version: 2,
+            size: 2,
+            checksum: None,
+        })
+        .unwrap(),
     )
     .await
     .unwrap();
@@ -253,16 +291,23 @@ async fn a_corrupted_checkpoint_is_rejected_in_favour_of_the_log() {
     let snap = cold.snapshot().await;
     assert_eq!(snap.version, 2);
     assert!(
-        snap.get_by_natural_key(EntityKind::Catalog, "alpha").is_some(),
+        snap.get_by_natural_key(EntityKind::Catalog, "alpha")
+            .is_some(),
         "must fall back to the log, not adopt the corrupted checkpoint"
     );
-    assert!(snap.get_by_natural_key(EntityKind::Catalog, "alppa").is_none());
+    assert!(snap
+        .get_by_natural_key(EntityKind::Catalog, "alppa")
+        .is_none());
 }
 
 #[test]
 fn content_hash_changes_on_any_edit() {
     let a = log::content_hash(b"{\"name\":\"alpha\"}");
-    assert_eq!(a, log::content_hash(b"{\"name\":\"alpha\"}"), "must be stable");
+    assert_eq!(
+        a,
+        log::content_hash(b"{\"name\":\"alpha\"}"),
+        "must be stable"
+    );
     assert_ne!(a, log::content_hash(b"{\"name\":\"alppa\"}"));
     assert_ne!(a, log::content_hash(b"{\"name\":\"alph\"}"));
     assert_ne!(log::content_hash(b""), log::content_hash(b"\n"));
@@ -303,7 +348,12 @@ async fn a_truncated_checkpoint_is_rejected_in_favour_of_the_log() {
     // Claim more lines than the object holds.
     log.put(
         action::LAST_CHECKPOINT_KEY,
-        serde_json::to_vec(&LastCheckpoint { version: 2, size: 99, checksum: None }).unwrap(),
+        serde_json::to_vec(&LastCheckpoint {
+            version: 2,
+            size: 99,
+            checksum: None,
+        })
+        .unwrap(),
     )
     .await
     .unwrap();
@@ -311,7 +361,9 @@ async fn a_truncated_checkpoint_is_rejected_in_favour_of_the_log() {
     let cold = Store::open(log).await.unwrap();
     let snap = cold.snapshot().await;
     assert_eq!(snap.version, 2);
-    assert!(snap.get_by_natural_key(EntityKind::Catalog, "beta").is_some());
+    assert!(snap
+        .get_by_natural_key(EntityKind::Catalog, "beta")
+        .is_some());
 }
 
 #[tokio::test]
@@ -397,14 +449,20 @@ async fn version_ranges_are_inclusive_at_both_ends() {
         "matches SQL's commit_version >= $2 AND commit_version <= $3"
     );
     assert_eq!(store.delta.versions(t, None, None).await.unwrap().len(), 10);
-    assert_eq!(store.delta.versions(t, Some(0), None).await.unwrap().len(), 10);
+    assert_eq!(
+        store.delta.versions(t, Some(0), None).await.unwrap().len(),
+        10
+    );
 }
 
 #[tokio::test]
 async fn a_table_with_no_commits_has_no_latest_version() {
     let log = Arc::new(MemLog::default());
     let store = Store::open(log).await.unwrap();
-    assert_eq!(store.delta.latest_version(Uuid::now_v7()).await.unwrap(), None);
+    assert_eq!(
+        store.delta.latest_version(Uuid::now_v7()).await.unwrap(),
+        None
+    );
 }
 
 /// The hint is an optimisation, never a source of truth: a replica that never
@@ -446,7 +504,9 @@ async fn delta_partitions_do_not_corrupt_metastore_replay() {
     let cold = Store::open(log).await.unwrap();
     let snap = cold.snapshot().await;
     assert_eq!(snap.version, 1, "only the catalog commit counts");
-    assert!(snap.get_by_natural_key(EntityKind::Catalog, "alpha").is_some());
+    assert!(snap
+        .get_by_natural_key(EntityKind::Catalog, "alpha")
+        .is_some());
 }
 
 // ── paginated backends ──────────────────────────────────────────────────────
@@ -482,7 +542,10 @@ impl ObjectLog for TruncatingLog {
 }
 
 fn truncating(page: usize) -> Arc<TruncatingLog> {
-    Arc::new(TruncatingLog { inner: MemLog::default(), page })
+    Arc::new(TruncatingLog {
+        inner: MemLog::default(),
+        page,
+    })
 }
 
 #[tokio::test]
@@ -495,8 +558,13 @@ async fn main_log_replays_fully_against_a_paginating_backend() {
 
     let cold = Store::open(log).await.unwrap();
     let snap = cold.snapshot().await;
-    assert_eq!(snap.version, 25, "replay must page, not stop at the first page");
-    assert!(snap.get_by_natural_key(EntityKind::Catalog, "cat024").is_some());
+    assert_eq!(
+        snap.version, 25,
+        "replay must page, not stop at the first page"
+    );
+    assert!(snap
+        .get_by_natural_key(EntityKind::Catalog, "cat024")
+        .is_some());
 }
 
 #[tokio::test]
@@ -537,7 +605,9 @@ async fn a_backend_that_ignores_start_after_is_refused_not_looped_forever() {
     }
 
     let seed = MemLog::default();
-    seed.put_if_absent(&action::commit_key(1), b"{}".to_vec()).await.unwrap();
+    seed.put_if_absent(&action::commit_key(1), b"{}".to_vec())
+        .await
+        .unwrap();
     let log = Arc::new(IgnoresStartAfter(seed));
 
     match Store::open(log).await {
@@ -562,7 +632,10 @@ fn user_is_keyed_on_name_not_email() {
     // drop every user with a null email out of the index entirely.
     let with_email = serde_json::json!({"name": "ada", "email": "ada@example.com"});
     let without = serde_json::json!({"name": "ada"});
-    assert_eq!(natural_key_for(EntityKind::User, &with_email).as_deref(), Some("ada"));
+    assert_eq!(
+        natural_key_for(EntityKind::User, &with_email).as_deref(),
+        Some("ada")
+    );
     assert_eq!(
         natural_key_for(EntityKind::User, &without).as_deref(),
         Some("ada"),
@@ -586,9 +659,7 @@ fn columns_are_keyed_by_table_and_ordinal() {
 fn properties_are_keyed_by_entity_and_key() {
     // UNIQUE(entity_id, entity_type, property_key)
     let e = Uuid::now_v7();
-    let p = |ty: &str, key: &str| {
-        serde_json::json!({"entity_id": e, "entity_type": ty, "property_key": key})
-    };
+    let p = |ty: &str, key: &str| serde_json::json!({"entity_id": e, "entity_type": ty, "property_key": key});
     let k = |ty: &str, key: &str| natural_key_for(EntityKind::Property, &p(ty, key)).unwrap();
 
     assert_ne!(k("TABLE", "a"), k("TABLE", "b"));
@@ -653,7 +724,10 @@ fn padded_ints_order_numerically_across_zero() {
     let mut by_pad = v;
     by_pad.sort_by_key(|n| pad_i64(*n));
     v.sort();
-    assert_eq!(by_pad, v, "lexicographic order of pad_i64 must match numeric order");
+    assert_eq!(
+        by_pad, v,
+        "lexicographic order of pad_i64 must match numeric order"
+    );
 }
 
 // ── bounded range listings ──────────────────────────────────────────────────
@@ -716,7 +790,6 @@ async fn a_bounded_range_does_not_page_the_whole_partition() {
 mod ported {
     use super::*;
 
-
     /// The SQL get_or_init is a read-then-insert with nothing between, and
     /// uc_metastore has no UNIQUE, so two replicas starting together could both
     /// insert. Here the check is inside the commit closure, so the loser re-runs
@@ -730,8 +803,18 @@ mod ported {
         let b = Store::open(log.clone()).await.unwrap();
 
         // Both replicas observe an empty metastore before either writes.
-        assert!(a.snapshot().await.iter(EntityKind::Metastore).next().is_none());
-        assert!(b.snapshot().await.iter(EntityKind::Metastore).next().is_none());
+        assert!(a
+            .snapshot()
+            .await
+            .iter(EntityKind::Metastore)
+            .next()
+            .is_none());
+        assert!(b
+            .snapshot()
+            .await
+            .iter(EntityKind::Metastore)
+            .next()
+            .is_none());
 
         let first = metastore::get_or_init(&a, "unity-catalog").await.unwrap();
         let second = metastore::get_or_init(&b, "unity-catalog").await.unwrap();
@@ -749,9 +832,13 @@ mod ported {
         let log = Arc::new(MemLog::default());
         let store = Store::open(log).await.unwrap();
 
-        let first = metastore::get_or_init(&store, "unity-catalog").await.unwrap();
+        let first = metastore::get_or_init(&store, "unity-catalog")
+            .await
+            .unwrap();
         let v = store.snapshot().await.version;
-        let again = metastore::get_or_init(&store, "unity-catalog").await.unwrap();
+        let again = metastore::get_or_init(&store, "unity-catalog")
+            .await
+            .unwrap();
 
         assert_eq!(first.id, again.id);
         assert_eq!(store.snapshot().await.version, v, "a no-op must not append");
@@ -769,7 +856,10 @@ mod ported {
         let e = Uuid::now_v7();
 
         let props = |pairs: &[(&str, &str)]| -> HashMap<String, String> {
-            pairs.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect()
+            pairs
+                .iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect()
         };
 
         property::replace(&store, e, "table", &props(&[("a", "1"), ("b", "2")]))
@@ -809,23 +899,51 @@ mod ported {
             std::iter::once((k.to_string(), v.to_string())).collect()
         };
 
-        property::replace(&store, e1, "table", &one("k", "table-val")).await.unwrap();
-        property::replace(&store, e1, "schema", &one("k", "schema-val")).await.unwrap();
-        property::replace(&store, e2, "table", &one("k", "other-entity")).await.unwrap();
+        property::replace(&store, e1, "table", &one("k", "table-val"))
+            .await
+            .unwrap();
+        property::replace(&store, e1, "schema", &one("k", "schema-val"))
+            .await
+            .unwrap();
+        property::replace(&store, e2, "table", &one("k", "other-entity"))
+            .await
+            .unwrap();
 
-        assert_eq!(property::get_for_entity(&store, e1, "table").await.unwrap(), one("k", "table-val"));
-        assert_eq!(property::get_for_entity(&store, e1, "schema").await.unwrap(), one("k", "schema-val"));
-        assert_eq!(property::get_for_entity(&store, e2, "table").await.unwrap(), one("k", "other-entity"));
+        assert_eq!(
+            property::get_for_entity(&store, e1, "table").await.unwrap(),
+            one("k", "table-val")
+        );
+        assert_eq!(
+            property::get_for_entity(&store, e1, "schema")
+                .await
+                .unwrap(),
+            one("k", "schema-val")
+        );
+        assert_eq!(
+            property::get_for_entity(&store, e2, "table").await.unwrap(),
+            one("k", "other-entity")
+        );
 
         // Deleting one group must not touch the others.
-        property::delete_for_entity(&store, e1, "table").await.unwrap();
-        assert!(property::get_for_entity(&store, e1, "table").await.unwrap().is_empty());
-        assert_eq!(property::get_for_entity(&store, e1, "schema").await.unwrap(), one("k", "schema-val"));
-        assert_eq!(property::get_for_entity(&store, e2, "table").await.unwrap(), one("k", "other-entity"));
+        property::delete_for_entity(&store, e1, "table")
+            .await
+            .unwrap();
+        assert!(property::get_for_entity(&store, e1, "table")
+            .await
+            .unwrap()
+            .is_empty());
+        assert_eq!(
+            property::get_for_entity(&store, e1, "schema")
+                .await
+                .unwrap(),
+            one("k", "schema-val")
+        );
+        assert_eq!(
+            property::get_for_entity(&store, e2, "table").await.unwrap(),
+            one("k", "other-entity")
+        );
     }
-
 }
-
 
 // ── multi-replica read freshness ────────────────────────────────────────────
 
@@ -845,7 +963,8 @@ async fn a_stale_replica_catches_up_when_it_writes() {
     let snap = b.snapshot().await;
     assert_eq!(snap.version, 2);
     assert!(
-        snap.get_by_natural_key(EntityKind::Catalog, "written-by-a").is_some(),
+        snap.get_by_natural_key(EntityKind::Catalog, "written-by-a")
+            .is_some(),
         "committing must have pulled in a's work"
     );
 }
@@ -891,7 +1010,10 @@ async fn refreshing_repeatedly_is_harmless() {
         store.catch_up().await.unwrap();
     }
     let snap = store.snapshot().await;
-    assert_eq!(snap.version, 1, "a no-op refresh must not advance the version");
+    assert_eq!(
+        snap.version, 1,
+        "a no-op refresh must not advance the version"
+    );
     assert_eq!(snap.scan(EntityKind::Catalog, None, 10).len(), 1);
 }
 
@@ -936,18 +1058,9 @@ async fn a_delete_records_who_did_it() {
 
     // A real row, not the minimal fixture: delete deserialises it.
     actor::scope(Some(Actor::new(None, "creator@corp.example")), async {
-        catalog::create(
-            &store,
-            Uuid::now_v7(),
-            "doomed",
-            None,
-            None,
-            None,
-            None,
-            0,
-        )
-        .await
-        .unwrap();
+        catalog::create(&store, Uuid::now_v7(), "doomed", None, None, None, None, 0)
+            .await
+            .unwrap();
     })
     .await;
     actor::scope(Some(Actor::new(None, "deleter@corp.example")), async {
@@ -1014,9 +1127,15 @@ async fn the_actor_does_not_leak_between_scopes() {
     })
     .await;
 
-    assert_eq!(commit_info(&log, 1).await.actor.unwrap().name, "first@corp.example");
+    assert_eq!(
+        commit_info(&log, 1).await.actor.unwrap().name,
+        "first@corp.example"
+    );
     assert!(commit_info(&log, 2).await.actor.is_none());
-    assert_eq!(commit_info(&log, 3).await.actor.unwrap().name, "second@corp.example");
+    assert_eq!(
+        commit_info(&log, 3).await.actor.unwrap().name,
+        "second@corp.example"
+    );
 }
 
 /// The actor is captured at commit time, so a later rename does not re-attribute
@@ -1027,13 +1146,19 @@ async fn the_recorded_name_is_the_one_from_when_it_happened() {
     let store = Store::open(log.clone()).await.unwrap();
     let id = Uuid::now_v7();
 
-    actor::scope(Some(Actor::new(Some(id), "alice@old-corp.example")), async {
-        put_catalog(&store, "before").await.unwrap();
-    })
+    actor::scope(
+        Some(Actor::new(Some(id), "alice@old-corp.example")),
+        async {
+            put_catalog(&store, "before").await.unwrap();
+        },
+    )
     .await;
-    actor::scope(Some(Actor::new(Some(id), "alice@new-corp.example")), async {
-        put_catalog(&store, "after").await.unwrap();
-    })
+    actor::scope(
+        Some(Actor::new(Some(id), "alice@new-corp.example")),
+        async {
+            put_catalog(&store, "after").await.unwrap();
+        },
+    )
     .await;
 
     let first = commit_info(&log, 1).await.actor.unwrap();

@@ -45,7 +45,11 @@ pub async fn create(store: &Store, row: &FunctionRow) -> Result<FunctionRow, UcE
             let body = serde_json::to_value(&row)
                 .map_err(|e| UcError::new(ErrorCode::Internal, e.to_string()))?;
             Ok((
-                vec![Action::Upsert { kind: EntityKind::Function, id: row.id, body }],
+                vec![Action::Upsert {
+                    kind: EntityKind::Function,
+                    id: row.id,
+                    body,
+                }],
                 row.clone(),
             ))
         })
@@ -80,7 +84,12 @@ pub async fn get_by_schema_and_name(
 ) -> Result<FunctionRow, UcError> {
     let snap = store.snapshot().await;
     snap.get_by_natural_key(EntityKind::Function, &nk(schema_id, name))
-        .ok_or_else(|| UcError::new(ErrorCode::NotFound, format!("Function '{}' not found", name)))
+        .ok_or_else(|| {
+            UcError::new(
+                ErrorCode::NotFound,
+                format!("Function '{}' not found", name),
+            )
+        })
         .and_then(fn_of)
 }
 
@@ -118,8 +127,7 @@ pub async fn list(
         crate::pagination::over_fetch(max_results),
     );
     let rows: Vec<FunctionRow> = found.into_iter().map(fn_of).collect::<Result<_, _>>()?;
-    let (rows, next) =
-        crate::pagination::page(rows, max_results, |r| r.name.clone());
+    let (rows, next) = crate::pagination::page(rows, max_results, |r| r.name.clone());
     Ok((rows, next))
 }
 
@@ -139,7 +147,10 @@ pub async fn delete(store: &Store, id: Uuid) -> Result<(), UcError> {
                     format!("Function '{}' not found", id),
                 ));
             }
-            let mut actions = vec![Action::Remove { kind: EntityKind::Function, id }];
+            let mut actions = vec![Action::Remove {
+                kind: EntityKind::Function,
+                id,
+            }];
             for p in snap.iter(EntityKind::FunctionParameter) {
                 let param = param_of(p)?;
                 if param.function_id == id {

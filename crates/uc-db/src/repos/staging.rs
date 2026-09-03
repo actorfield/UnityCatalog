@@ -69,11 +69,7 @@ pub async fn get_by_location(store: &Store, location: &str) -> Result<StagingTab
 
 /// Deleting nothing is not an error, matching the SQL's unchecked
 /// rows_affected.
-pub async fn mark_committed(
-    store: &Store,
-    id: Uuid,
-    committed_at: i64,
-) -> Result<(), UcError> {
+pub async fn mark_committed(store: &Store, id: Uuid, committed_at: i64) -> Result<(), UcError> {
     store
         .commit("COMMIT STAGING TABLE", |snap| {
             let Some(current) = snap.get(EntityKind::StagingTable, id) else {

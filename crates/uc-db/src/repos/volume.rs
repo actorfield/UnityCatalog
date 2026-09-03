@@ -36,7 +36,11 @@ pub async fn create(store: &Store, row: &VolumeRow) -> Result<VolumeRow, UcError
             let body = serde_json::to_value(&row)
                 .map_err(|e| UcError::new(ErrorCode::Internal, e.to_string()))?;
             Ok((
-                vec![Action::Upsert { kind: EntityKind::Volume, id: row.id, body }],
+                vec![Action::Upsert {
+                    kind: EntityKind::Volume,
+                    id: row.id,
+                    body,
+                }],
                 row.clone(),
             ))
         })
@@ -75,8 +79,7 @@ pub async fn list(
         crate::pagination::over_fetch(max_results),
     );
     let rows: Vec<VolumeRow> = found.into_iter().map(row_of).collect::<Result<_, _>>()?;
-    let (rows, next_token) =
-        crate::pagination::page(rows, max_results, |r| r.name.clone());
+    let (rows, next_token) = crate::pagination::page(rows, max_results, |r| r.name.clone());
     Ok((rows, next_token))
 }
 
@@ -121,7 +124,11 @@ pub async fn update(
             let body = serde_json::to_value(&row)
                 .map_err(|e| UcError::new(ErrorCode::Internal, e.to_string()))?;
             Ok((
-                vec![Action::Upsert { kind: EntityKind::Volume, id, body }],
+                vec![Action::Upsert {
+                    kind: EntityKind::Volume,
+                    id,
+                    body,
+                }],
                 row,
             ))
         })
@@ -137,7 +144,13 @@ pub async fn delete(store: &Store, id: Uuid) -> Result<(), UcError> {
                     format!("Volume '{}' not found", id),
                 ));
             }
-            Ok((vec![Action::Remove { kind: EntityKind::Volume, id }], ()))
+            Ok((
+                vec![Action::Remove {
+                    kind: EntityKind::Volume,
+                    id,
+                }],
+                (),
+            ))
         })
         .await
 }

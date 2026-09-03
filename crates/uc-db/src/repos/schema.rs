@@ -61,7 +61,11 @@ pub async fn create(
             let body = serde_json::to_value(&row)
                 .map_err(|e| UcError::new(ErrorCode::Internal, e.to_string()))?;
             Ok((
-                vec![Action::Upsert { kind: EntityKind::Schema, id, body }],
+                vec![Action::Upsert {
+                    kind: EntityKind::Schema,
+                    id,
+                    body,
+                }],
                 row.clone(),
             ))
         })
@@ -124,8 +128,7 @@ pub async fn list(
 
     // Off-by-one preserved from the SQL version verbatim; clients page against
     // this behaviour today.
-    let (rows, next_token) =
-        crate::pagination::page(rows, max_results, |r| r.name.clone());
+    let (rows, next_token) = crate::pagination::page(rows, max_results, |r| r.name.clone());
     Ok((rows, next_token))
 }
 
@@ -177,7 +180,11 @@ pub async fn update(
             let body = serde_json::to_value(&row)
                 .map_err(|e| UcError::new(ErrorCode::Internal, e.to_string()))?;
             Ok((
-                vec![Action::Upsert { kind: EntityKind::Schema, id, body }],
+                vec![Action::Upsert {
+                    kind: EntityKind::Schema,
+                    id,
+                    body,
+                }],
                 row,
             ))
         })
@@ -194,7 +201,13 @@ pub async fn delete(store: &Store, id: Uuid) -> Result<(), UcError> {
                 ));
             }
             // No cascade: FK enforcement is off in the SQL path too.
-            Ok((vec![Action::Remove { kind: EntityKind::Schema, id }], ()))
+            Ok((
+                vec![Action::Remove {
+                    kind: EntityKind::Schema,
+                    id,
+                }],
+                (),
+            ))
         })
         .await
 }

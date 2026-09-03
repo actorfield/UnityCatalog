@@ -27,7 +27,11 @@ pub async fn create(store: &Store, row: &CredentialRow) -> Result<CredentialRow,
             let body = serde_json::to_value(&row)
                 .map_err(|e| UcError::new(ErrorCode::Internal, e.to_string()))?;
             Ok((
-                vec![Action::Upsert { kind: EntityKind::Credential, id: row.id, body }],
+                vec![Action::Upsert {
+                    kind: EntityKind::Credential,
+                    id: row.id,
+                    body,
+                }],
                 row.clone(),
             ))
         })
@@ -64,10 +68,13 @@ pub async fn list(
     max_results: i64,
 ) -> Result<(Vec<CredentialRow>, Option<String>), UcError> {
     let snap = store.snapshot().await;
-    let found = snap.scan(EntityKind::Credential, page_token, crate::pagination::over_fetch(max_results));
+    let found = snap.scan(
+        EntityKind::Credential,
+        page_token,
+        crate::pagination::over_fetch(max_results),
+    );
     let rows: Vec<CredentialRow> = found.into_iter().map(row_of).collect::<Result<_, _>>()?;
-    let (rows, next) =
-        crate::pagination::page(rows, max_results, |r| r.name.clone());
+    let (rows, next) = crate::pagination::page(rows, max_results, |r| r.name.clone());
     Ok((rows, next))
 }
 
@@ -84,7 +91,10 @@ pub async fn delete(store: &Store, name: &str) -> Result<(), UcError> {
                 })?;
             let row = row_of(current)?;
             Ok((
-                vec![Action::Remove { kind: EntityKind::Credential, id: row.id }],
+                vec![Action::Remove {
+                    kind: EntityKind::Credential,
+                    id: row.id,
+                }],
                 (),
             ))
         })
@@ -140,7 +150,11 @@ pub async fn update(
             let body = serde_json::to_value(&row)
                 .map_err(|e| UcError::new(ErrorCode::Internal, e.to_string()))?;
             Ok((
-                vec![Action::Upsert { kind: EntityKind::Credential, id, body }],
+                vec![Action::Upsert {
+                    kind: EntityKind::Credential,
+                    id,
+                    body,
+                }],
                 (),
             ))
         })

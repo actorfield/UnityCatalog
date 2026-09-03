@@ -4,8 +4,8 @@
 use crate::models::external_location::ExternalLocationRow;
 use crate::store::action::{Action, EntityKind};
 use crate::store::Store;
-use uuid::Uuid;
 use uc_errors::{ErrorCode, UcError};
+use uuid::Uuid;
 
 fn row_of(v: &serde_json::Value) -> Result<ExternalLocationRow, UcError> {
     serde_json::from_value(v.clone()).map_err(|e| {
@@ -69,10 +69,8 @@ pub async fn list(
         page_token,
         crate::pagination::over_fetch(max_results),
     );
-    let rows: Vec<ExternalLocationRow> =
-        found.into_iter().map(row_of).collect::<Result<_, _>>()?;
-    let (rows, next) =
-        crate::pagination::page(rows, max_results, |r| r.name.clone());
+    let rows: Vec<ExternalLocationRow> = found.into_iter().map(row_of).collect::<Result<_, _>>()?;
+    let (rows, next) = crate::pagination::page(rows, max_results, |r| r.name.clone());
     Ok((rows, next))
 }
 
@@ -114,12 +112,7 @@ pub async fn find_by_path_prefix(
         .map(row_of)
         .collect::<Result<Vec<_>, _>>()?;
     candidates.retain(|l| path.starts_with(&l.url));
-    candidates.sort_by(|a, b| {
-        b.url
-            .len()
-            .cmp(&a.url.len())
-            .then_with(|| a.id.cmp(&b.id))
-    });
+    candidates.sort_by(|a, b| b.url.len().cmp(&a.url.len()).then_with(|| a.id.cmp(&b.id)));
     Ok(candidates.into_iter().next())
 }
 

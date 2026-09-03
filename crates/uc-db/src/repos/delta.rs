@@ -18,8 +18,8 @@ fn decode(bytes: &[u8]) -> Result<DeltaCommitRow, UcError> {
 }
 
 pub async fn insert(store: &Store, row: &DeltaCommitRow) -> Result<DeltaCommitRow, UcError> {
-    let body = serde_json::to_vec(row)
-        .map_err(|e| UcError::new(ErrorCode::Internal, e.to_string()))?;
+    let body =
+        serde_json::to_vec(row).map_err(|e| UcError::new(ErrorCode::Internal, e.to_string()))?;
     // AlreadyExists is mapped to CommitVersionConflict inside DeltaLog::append,
     // preserving the 409 the unique-violation branch produced.
     store
@@ -67,11 +67,7 @@ pub async fn latest_version(store: &Store, table_id: Uuid) -> Result<Option<i64>
 /// key. See `DeltaLog::mutate_commit` for the full reasoning.
 ///
 /// A missing commit is a no-op, matching the SQL UPDATE's zero rows matched.
-pub async fn mark_backfilled(
-    store: &Store,
-    table_id: Uuid,
-    version: i64,
-) -> Result<(), UcError> {
+pub async fn mark_backfilled(store: &Store, table_id: Uuid, version: i64) -> Result<(), UcError> {
     store
         .delta
         .mutate_commit(table_id, version, |doc| {

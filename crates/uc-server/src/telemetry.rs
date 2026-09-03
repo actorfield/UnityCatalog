@@ -68,7 +68,10 @@ pub(crate) fn init(log_level: &str) -> anyhow::Result<Telemetry> {
 
     let endpoint = std::env::var("OTEL_EXPORTER_OTLP_ENDPOINT").unwrap_or_default();
     if endpoint.is_empty() {
-        tracing_subscriber::registry().with(filter).with(stdout).init();
+        tracing_subscriber::registry()
+            .with(filter)
+            .with(stdout)
+            .init();
         return Ok(Telemetry {
             traces: None,
             logs: None,

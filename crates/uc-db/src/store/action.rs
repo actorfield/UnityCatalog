@@ -206,7 +206,12 @@ pub fn version_from_key(key: &str) -> Option<u64> {
 #[cfg(test)]
 mod tests {
     // Tests panic on purpose; see the note in the crate-level modules.
-    #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::indexing_slicing)]
+    #![allow(
+        clippy::unwrap_used,
+        clippy::expect_used,
+        clippy::panic,
+        clippy::indexing_slicing
+    )]
     use super::*;
 
     fn info() -> CommitInfo {
@@ -276,7 +281,10 @@ mod tests {
         let mut bytes = encode_commit(&info(), &[]).unwrap();
         bytes.extend(b"{not json}\n");
         let err = decode_commit("k", &bytes).unwrap_err();
-        assert!(format!("{err:?}").contains("line 2"), "error should name the line");
+        assert!(
+            format!("{err:?}").contains("line 2"),
+            "error should name the line"
+        );
     }
 
     #[test]
@@ -289,7 +297,10 @@ mod tests {
 
     #[test]
     fn a_commit_without_commitinfo_is_refused() {
-        let line = Line::Remove { kind: EntityKind::Catalog, id: Uuid::nil() };
+        let line = Line::Remove {
+            kind: EntityKind::Catalog,
+            id: Uuid::nil(),
+        };
         let mut bytes = serde_json::to_vec(&line).unwrap();
         bytes.push(b'\n');
         assert!(decode_commit("k", &bytes).is_err());

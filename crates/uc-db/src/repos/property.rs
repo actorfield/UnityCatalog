@@ -55,7 +55,10 @@ pub async fn replace(
             let mut actions: Vec<Action> = snap
                 .ids_under_prefix(EntityKind::Property, &pfx)
                 .into_iter()
-                .map(|id| Action::Remove { kind: EntityKind::Property, id })
+                .map(|id| Action::Remove {
+                    kind: EntityKind::Property,
+                    id,
+                })
                 .collect();
 
             // Sorted so the commit is reproducible: HashMap iteration order
@@ -96,7 +99,10 @@ pub async fn delete_for_entity(
             let actions: Vec<Action> = snap
                 .ids_under_prefix(EntityKind::Property, &pfx)
                 .into_iter()
-                .map(|id| Action::Remove { kind: EntityKind::Property, id })
+                .map(|id| Action::Remove {
+                    kind: EntityKind::Property,
+                    id,
+                })
                 .collect();
             Ok((actions, ()))
         })
@@ -135,7 +141,11 @@ pub async fn set(
             let body = serde_json::to_value(&row)
                 .map_err(|e| UcError::new(ErrorCode::Internal, e.to_string()))?;
             Ok((
-                vec![Action::Upsert { kind: EntityKind::Property, id, body }],
+                vec![Action::Upsert {
+                    kind: EntityKind::Property,
+                    id,
+                    body,
+                }],
                 (),
             ))
         })
@@ -157,7 +167,10 @@ pub async fn delete_key(
             };
             let row = row_of(existing)?;
             Ok((
-                vec![Action::Remove { kind: EntityKind::Property, id: row.id }],
+                vec![Action::Remove {
+                    kind: EntityKind::Property,
+                    id: row.id,
+                }],
                 (),
             ))
         })

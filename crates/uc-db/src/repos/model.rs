@@ -103,8 +103,7 @@ pub async fn list_models(
     );
     let rows: Vec<RegisteredModelRow> =
         found.into_iter().map(model_of).collect::<Result<_, _>>()?;
-    let (rows, next) =
-        crate::pagination::page(rows, max_results, |r| r.name.clone());
+    let (rows, next) = crate::pagination::page(rows, max_results, |r| r.name.clone());
     Ok((rows, next))
 }
 
@@ -232,7 +231,11 @@ pub async fn update_model(
             let body = serde_json::to_value(&row)
                 .map_err(|e| UcError::new(ErrorCode::Internal, e.to_string()))?;
             Ok((
-                vec![Action::Upsert { kind: EntityKind::RegisteredModel, id, body }],
+                vec![Action::Upsert {
+                    kind: EntityKind::RegisteredModel,
+                    id,
+                    body,
+                }],
                 (),
             ))
         })
@@ -250,7 +253,11 @@ pub async fn set_max_version(store: &Store, id: Uuid, next: i32) -> Result<(), U
             let body = serde_json::to_value(&row)
                 .map_err(|e| UcError::new(ErrorCode::Internal, e.to_string()))?;
             Ok((
-                vec![Action::Upsert { kind: EntityKind::RegisteredModel, id, body }],
+                vec![Action::Upsert {
+                    kind: EntityKind::RegisteredModel,
+                    id,
+                    body,
+                }],
                 (),
             ))
         })
@@ -258,10 +265,7 @@ pub async fn set_max_version(store: &Store, id: Uuid, next: i32) -> Result<(), U
 }
 
 /// All versions of a model, ordered by version.
-pub async fn list_versions(
-    store: &Store,
-    model_id: Uuid,
-) -> Result<Vec<ModelVersionRow>, UcError> {
+pub async fn list_versions(store: &Store, model_id: Uuid) -> Result<Vec<ModelVersionRow>, UcError> {
     let snap = store.snapshot().await;
     versions_of(&snap, model_id)
 }
@@ -287,7 +291,11 @@ pub async fn update_version(
             let body = serde_json::to_value(&row)
                 .map_err(|e| UcError::new(ErrorCode::Internal, e.to_string()))?;
             Ok((
-                vec![Action::Upsert { kind: EntityKind::ModelVersion, id, body }],
+                vec![Action::Upsert {
+                    kind: EntityKind::ModelVersion,
+                    id,
+                    body,
+                }],
                 (),
             ))
         })
@@ -305,7 +313,11 @@ pub async fn set_version_status(store: &Store, id: Uuid, status: &str) -> Result
             let body = serde_json::to_value(&row)
                 .map_err(|e| UcError::new(ErrorCode::Internal, e.to_string()))?;
             Ok((
-                vec![Action::Upsert { kind: EntityKind::ModelVersion, id, body }],
+                vec![Action::Upsert {
+                    kind: EntityKind::ModelVersion,
+                    id,
+                    body,
+                }],
                 (),
             ))
         })

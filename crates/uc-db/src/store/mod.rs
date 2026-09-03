@@ -105,7 +105,10 @@ impl Snapshot {
     /// natural-key index to ride on. Linear, deliberately: adding a secondary
     /// index for each would cost more than it saves at these row counts.
     pub fn iter(&self, kind: EntityKind) -> impl Iterator<Item = &serde_json::Value> {
-        self.entities.get(&kind).into_iter().flat_map(|m| m.values())
+        self.entities
+            .get(&kind)
+            .into_iter()
+            .flat_map(|m| m.values())
     }
 
     /// How many rows are resident, per kind.
@@ -468,7 +471,7 @@ impl StoreInner {
             size,
             checksum: Some(log::content_hash(&body_for_hash)),
         })
-            .map_err(|e| UcError::new(ErrorCode::Internal, e.to_string()))?;
+        .map_err(|e| UcError::new(ErrorCode::Internal, e.to_string()))?;
         self.log.put(action::LAST_CHECKPOINT_KEY, ptr).await
     }
 }

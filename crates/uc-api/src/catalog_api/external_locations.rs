@@ -83,7 +83,11 @@ pub async fn list(
 ) -> Result<Json<ListExternalLocationsResponse>, UcError> {
     // A non-positive max_results means "unspecified", not "an empty page". It
     // used to reach the repo layer and underflow there.
-    let max = params.max_results.filter(|n| *n > 0).unwrap_or(50).min(1000);
+    let max = params
+        .max_results
+        .filter(|n| *n > 0)
+        .unwrap_or(50)
+        .min(1000);
     let (rows, next_token) =
         external_location::list(&state.pool, params.page_token.as_deref(), max).await?;
     let mut external_locations = Vec::with_capacity(rows.len());
@@ -124,11 +128,7 @@ pub async fn update(
     let now = now_ms();
     // Resolve new credential_id if credential_name is being changed
     let new_cred_id = if let Some(ref cred_name) = req.credential_name {
-        Some(
-            credential::get_by_name(&state.pool, cred_name)
-                .await?
-                .id,
-        )
+        Some(credential::get_by_name(&state.pool, cred_name).await?.id)
     } else {
         None
     };

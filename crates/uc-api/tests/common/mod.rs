@@ -1,7 +1,6 @@
 // Shared test harness. Items are `pub` so each test binary can use them, but
 // within this compilation unit rustc sees no reachable path to them.
 #![allow(unreachable_pub)]
-
 // Each integration test file is compiled as its own binary and pulls in this
 // module separately, so helpers unused by one binary but used by another
 // trip dead_code false positives.
@@ -136,9 +135,7 @@ pub const DELTA: &str = "/delta/v1";
 /// Returns the router alongside the underlying log, so a test can read back
 /// what was actually committed — the actor on each commit, for instance, which
 /// is not visible through the API.
-pub async fn build_auth_test_app(
-    oidc_config: Option<Arc<OidcConfig>>,
-) -> (Router, Arc<MemoryLog>) {
+pub async fn build_auth_test_app(oidc_config: Option<Arc<OidcConfig>>) -> (Router, Arc<MemoryLog>) {
     let log = Arc::new(MemoryLog::new());
     let pool = AnyPool::open(log.clone())
         .await
@@ -174,12 +171,7 @@ pub async fn build_auth_test_app(
 }
 
 /// Send a GET with an explicit Authorization: Bearer header.
-pub async fn post_bearer(
-    app: &Router,
-    uri: &str,
-    token: &str,
-    body: Value,
-) -> (StatusCode, Value) {
+pub async fn post_bearer(app: &Router, uri: &str, token: &str, body: Value) -> (StatusCode, Value) {
     let req = Request::builder()
         .method("POST")
         .uri(uri)

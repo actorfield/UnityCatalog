@@ -171,7 +171,12 @@ fn aws_display<E: std::fmt::Debug, R: std::fmt::Debug>(e: &SdkError<E, R>) -> St
 #[cfg(test)]
 mod tests {
     // Tests panic on purpose; see the note in the crate-level modules.
-    #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::indexing_slicing)]
+    #![allow(
+        clippy::unwrap_used,
+        clippy::expect_used,
+        clippy::panic,
+        clippy::indexing_slicing
+    )]
     use super::*;
 
     fn log(root: &str) -> S3Log {

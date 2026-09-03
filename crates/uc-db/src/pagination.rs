@@ -25,7 +25,11 @@ pub fn page<T>(
 
     let has_more = rows.len() > limit;
     rows.truncate(limit);
-    let next = if has_more { rows.last().map(&key) } else { None };
+    let next = if has_more {
+        rows.last().map(&key)
+    } else {
+        None
+    };
     (rows, next)
 }
 
@@ -45,7 +49,12 @@ pub fn over_fetch(max_results: i64) -> usize {
 #[cfg(test)]
 mod tests {
     // Tests panic on purpose; see the note in the crate-level modules.
-    #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::indexing_slicing)]
+    #![allow(
+        clippy::unwrap_used,
+        clippy::expect_used,
+        clippy::panic,
+        clippy::indexing_slicing
+    )]
     use super::*;
 
     fn names(n: usize) -> Vec<String> {

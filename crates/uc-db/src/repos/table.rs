@@ -46,7 +46,11 @@ pub async fn create(store: &Store, row: &TableRow) -> Result<TableRow, UcError> 
             let body = serde_json::to_value(&row)
                 .map_err(|e| UcError::new(ErrorCode::Internal, e.to_string()))?;
             Ok((
-                vec![Action::Upsert { kind: EntityKind::Table, id: row.id, body }],
+                vec![Action::Upsert {
+                    kind: EntityKind::Table,
+                    id: row.id,
+                    body,
+                }],
                 row.clone(),
             ))
         })
@@ -57,7 +61,10 @@ pub async fn get_by_id(store: &Store, id: Uuid) -> Result<TableRow, UcError> {
     let snap = store.snapshot().await;
     snap.get(EntityKind::Table, id)
         .ok_or_else(|| {
-            UcError::new(ErrorCode::TableNotFound, format!("Table '{}' not found", id))
+            UcError::new(
+                ErrorCode::TableNotFound,
+                format!("Table '{}' not found", id),
+            )
         })
         .and_then(table_of)
 }
@@ -92,8 +99,7 @@ pub async fn list(
         crate::pagination::over_fetch(max_results),
     );
     let rows: Vec<TableRow> = found.into_iter().map(table_of).collect::<Result<_, _>>()?;
-    let (rows, next_token) =
-        crate::pagination::page(rows, max_results, |r| r.name.clone());
+    let (rows, next_token) = crate::pagination::page(rows, max_results, |r| r.name.clone());
     Ok((rows, next_token))
 }
 
@@ -109,7 +115,13 @@ pub async fn delete(store: &Store, id: Uuid) -> Result<(), UcError> {
             // Columns are left behind, matching the SQL: FK enforcement is off
             // and nothing cascades there either. Callers that want them gone
             // call delete_columns, as they do today.
-            Ok((vec![Action::Remove { kind: EntityKind::Table, id }], ()))
+            Ok((
+                vec![Action::Remove {
+                    kind: EntityKind::Table,
+                    id,
+                }],
+                (),
+            ))
         })
         .await
 }
@@ -155,7 +167,10 @@ pub async fn delete_columns(store: &Store, table_id: Uuid) -> Result<(), UcError
             let actions: Vec<Action> = snap
                 .ids_under_prefix(EntityKind::Column, &pfx)
                 .into_iter()
-                .map(|id| Action::Remove { kind: EntityKind::Column, id })
+                .map(|id| Action::Remove {
+                    kind: EntityKind::Column,
+                    id,
+                })
                 .collect();
             Ok((actions, ()))
         })
@@ -196,7 +211,14 @@ pub async fn patch(
             row.updated_at = Some(updated_at);
             let body = serde_json::to_value(&row)
                 .map_err(|e| UcError::new(ErrorCode::Internal, e.to_string()))?;
-            Ok((vec![Action::Upsert { kind: EntityKind::Table, id, body }], ()))
+            Ok((
+                vec![Action::Upsert {
+                    kind: EntityKind::Table,
+                    id,
+                    body,
+                }],
+                (),
+            ))
         })
         .await
 }
@@ -232,7 +254,14 @@ pub async fn rename(
             row.updated_at = Some(updated_at);
             let body = serde_json::to_value(&row)
                 .map_err(|e| UcError::new(ErrorCode::Internal, e.to_string()))?;
-            Ok((vec![Action::Upsert { kind: EntityKind::Table, id, body }], ()))
+            Ok((
+                vec![Action::Upsert {
+                    kind: EntityKind::Table,
+                    id,
+                    body,
+                }],
+                (),
+            ))
         })
         .await
 }

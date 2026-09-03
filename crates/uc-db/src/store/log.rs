@@ -8,7 +8,10 @@
 //! create-if-absent. `ObjectLog` is the seam so that can be S3, MinIO, or an
 //! in-memory fake in tests without the store knowing which.
 
-use super::action::{checkpoint_key, commit_key, decode_commit, version_from_key, Action, CommitInfo, LAST_CHECKPOINT_KEY};
+use super::action::{
+    checkpoint_key, commit_key, decode_commit, version_from_key, Action, CommitInfo,
+    LAST_CHECKPOINT_KEY,
+};
 use serde::{Deserialize, Serialize};
 use uc_errors::{ErrorCode, UcError};
 
@@ -188,9 +191,7 @@ pub async fn read_commits_after(
 /// full scan from version 0 rather than failing. A checkpoint write that did
 /// not land must cost replay time, never data. The log itself is the source of
 /// truth; the pointer is an optimisation.
-pub async fn resolve_checkpoint(
-    log: &dyn ObjectLog,
-) -> Result<Option<(u64, Vec<u8>)>, UcError> {
+pub async fn resolve_checkpoint(log: &dyn ObjectLog) -> Result<Option<(u64, Vec<u8>)>, UcError> {
     let Some(ptr) = log.get(LAST_CHECKPOINT_KEY).await? else {
         return Ok(None);
     };
