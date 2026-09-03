@@ -3,9 +3,16 @@
 The SQL backends are gone, so an existing `uc.db` cannot be opened by the
 current binary. Its contents have to be written into the object store first.
 
-This describes a one-off tool that does not exist yet, and the decisions it has
-to get right. It is deliberately specific: the traps below are the ones that
-lose data quietly rather than loudly.
+`scripts/migrate_sqlite_to_log.py` does this. It is stdlib-only, read-only with
+respect to the database, and writes to a local directory so the output can be
+inspected before it is uploaded.
+
+    ./scripts/migrate_sqlite_to_log.py /path/to/uc.db ./out
+    mc cp --recursive ./out/_uc_log  myminio/uc-meta/<org>/
+
+What follows is why it does what it does. The traps below are the ones that
+lose data quietly rather than loudly, and they are the reason this is a script
+in the repository rather than something reconstructed each time.
 
 ## What does not need migrating
 
@@ -111,8 +118,16 @@ previous image back at the volume. That requires **keeping the pre-migration
 image tag**, since the current build cannot open a database at all. Pin it
 before starting.
 
-## Scope check
+## What has been verified
 
-18 entity kinds, 17 source tables. The bulk is mechanical row-to-JSON. The parts
-worth reviewing carefully are the four conversions above, the casbin ordering,
-and the delta-commit partitioning — everything else is a loop.
+A fixture database built from the pre-removal schema — metastore, catalog,
+schema, table, column, volume, user, three casbin rules and three delta commits
+— migrates, uploads to MinIO, and uc-server boots against it and serves the
+catalog, schema, table and volume over the API. The table id it serves is
+byte-identical to the one in SQLite, the delta commits land as three partition
+objects, and a write succeeds on top of the migrated state.
+
+What that does *not* cover: functions, models, staging tables, properties,
+dependencies and external locations have no fixture rows, so their column
+mappings are exercised by the generic row-to-JSON path but not asserted. Run
+the count check in step 4 against a real database before trusting them.

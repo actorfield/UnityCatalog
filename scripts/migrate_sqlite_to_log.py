@@ -8,10 +8,14 @@ anywhere; upload it afterwards, e.g.
     mc cp --recursive ./out/_uc_log  myminio/uc-meta/<org>/
 
 Stdlib only, and read-only with respect to the database: the original stays
-pristine as the rollback.
+pristine as the rollback. Not wired into the build -- it has no dependency on
+the crates and does not need to be rebuilt to run.
 
-This is a throwaway. It is not wired into the build and has no tests of its own
-beyond the round-trip check in `scripts/test_migrate.sh`.
+Kept in the repository rather than discarded after first use: the same
+migration has to run once per deployment, and reproducing the details below
+from scratch is where the mistakes happen.
+
+See docs/migration.md for the procedure and the verification steps.
 """
 
 import json
