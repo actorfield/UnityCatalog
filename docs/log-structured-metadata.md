@@ -399,20 +399,22 @@ duration. Fine for a metadata log; not a pattern to copy onto a hot path.
   4. port the 19 direct sqlx sites in uc-api                                DONE
   5. casbin policy off the pool                                             DONE
   6. key material out of the PVC                                            DONE
-     (landed as `--key-file` from a secret store, *not* the object store —
-      see below; the original plan for this step was unsafe)
-  7a. uc-server: `--storage-root`, `S3Log`, `--key-file`                    DONE
-  7b. drop the PVC from the operator                                        NOT DONE
-      Lives in a separate repo that is running in production and has not been
-      touched. Needs: a Secret populated from `--generate-key-file`, a
-      `--key-file` mount, `--storage-root` in place of `--database-url`, the
-      PVC removed, and the image built with `--features logstore`.
-  8. rename `AnyPool` -> `Store`                                            RETIRED
-     It assumed the log store would replace SQL outright. Both backends are
-     supported and tested, so `AnyPool` is the accurate name.
+     Landed by removing key material altogether rather than relocating it:
+     uc-server issues no tokens, so it holds no signing key. See "Auth is
+     verify-only" below. The original plan for this step -- putting the private
+     key in the object store -- was unsafe and is gone.
+  7. uc-server: `--storage-root`, `S3Log`, graceful shutdown, OTLP           DONE
+  8. remove the SQL backends entirely                                       DONE
+     `AnyPool` keeps its name: it is the handle the build selected, and there
+     is now exactly one.
 
-Nothing here has been deployed. Steps 1-7a keep the SQLite build working behind
-a feature flag, and 7b is the only irreversible move.
+What is left is deployment: whatever runs uc-server must stop passing
+`--database-url`, pass `--storage-root` instead, drop the metadata volume, and
+raise the memory limit (the snapshot is resident, at roughly 21 KiB per entity).
+That is outside this repository.
+
+Migrating an existing SQLite deployment needs a one-off tool; see
+`docs/migration.md`.
 
 Not attempted, and deliberately out of scope for v1:
 

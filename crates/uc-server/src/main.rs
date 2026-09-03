@@ -65,9 +65,11 @@ struct Args {
     /// credentials (temporary-table/path-credentials APIs), instead of
     /// returning Unimplemented for the S3 scheme. Requires UC-server's own
     /// AWS identity to have sts:AssumeRole permission on each
-    /// StorageCredential's role_arn. On by default -- every deployment in
-    /// this project uses MinIO/S3-compatible storage, so this is the normal
-    /// path, not an opt-in; pass --enable-aws-credentials=false to disable.
+    /// StorageCredential's role_arn.
+    ///
+    /// On by default: S3-scheme credentials are the common case, so vending is
+    /// the normal path rather than an opt-in. Pass
+    /// --enable-aws-credentials=false to disable.
     #[arg(long, default_value_t = true)]
     enable_aws_credentials: bool,
 
@@ -371,9 +373,10 @@ async fn shutdown_signal() {
 
 /// Open the metadata log at `s3://bucket/prefix`.
 ///
-/// `AWS_ENDPOINT_URL` redirects to MinIO, and forces path-style addressing:
-/// virtual-host style would resolve `bucket.minio.svc` as a hostname, which
-/// does not exist in-cluster.
+/// `AWS_ENDPOINT_URL` points at an S3-compatible store other than AWS, and
+/// forces path-style addressing with it: virtual-host style turns the bucket
+/// into a hostname prefix, which will not resolve for most self-hosted
+/// endpoints.
 async fn open_log_store(storage_root: &str) -> anyhow::Result<AnyPool> {
     use std::sync::Arc;
 
