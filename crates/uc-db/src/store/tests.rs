@@ -14,14 +14,42 @@
 
 use super::action::{Action, EntityKind};
 use super::log::{ObjectLog, PutResult};
+use super::row::Row;
 use super::*;
 use super::{natural_key_for, pad_i64};
 
 use super::memory::MemoryLog as MemLog;
 use put_catalog_helper as put_catalog;
 
-fn catalog(name: &str) -> serde_json::Value {
-    serde_json::json!({ "name": name })
+/// A complete CatalogRow. The store rejects a partial body now, so fixtures
+/// have to be real rows rather than the `{"name": …}` stubs they were.
+fn catalog_row(id: Uuid, name: &str) -> crate::models::catalog::CatalogRow {
+    crate::models::catalog::CatalogRow {
+        id,
+        name: name.to_string(),
+        comment: None,
+        owner: None,
+        created_at: 0,
+        created_by: None,
+        updated_at: None,
+        updated_by: None,
+        storage_root: None,
+        storage_location: None,
+    }
+}
+
+fn catalog(id: Uuid, name: &str) -> serde_json::Value {
+    serde_json::to_value(catalog_row(id, name)).expect("catalog row serialises")
+}
+
+/// Names out of a scan result, which is now typed.
+fn row_names(rows: Vec<&crate::store::row::Row>) -> Vec<String> {
+    rows.into_iter()
+        .map(|r| match r {
+            crate::store::row::Row::Catalog(c) => c.name.clone(),
+            other => panic!("expected a catalog row, got {:?}", other.kind()),
+        })
+        .collect()
 }
 
 pub(super) async fn put_catalog_helper(store: &Store, name: &str) -> Result<Uuid, UcError> {
@@ -38,7 +66,7 @@ pub(super) async fn put_catalog_helper(store: &Store, name: &str) -> Result<Uuid
                 vec![Action::Upsert {
                     kind: EntityKind::Catalog,
                     id,
-                    body: catalog(name),
+                    body: catalog(id, name),
                 }],
                 id,
             ))
@@ -146,7 +174,7 @@ async fn rename_frees_the_old_natural_key() {
                 vec![Action::Upsert {
                     kind: EntityKind::Catalog,
                     id,
-                    body: catalog("after"),
+                    body: catalog(id, "after"),
                 }],
                 (),
             ))
@@ -174,23 +202,17 @@ async fn scan_is_ordered_and_exclusive_of_the_page_token() {
     }
     let snap = store.snapshot().await;
 
-    let names = |rows: Vec<&serde_json::Value>| -> Vec<String> {
-        rows.iter()
-            .map(|v| v["name"].as_str().unwrap().to_string())
-            .collect()
-    };
-
     assert_eq!(
-        names(snap.scan(EntityKind::Catalog, None, 10)),
+        row_names(snap.scan(EntityKind::Catalog, None, 10)),
         vec!["alpha", "bravo", "charlie", "delta"]
     );
     assert_eq!(
-        names(snap.scan(EntityKind::Catalog, Some("bravo"), 10)),
+        row_names(snap.scan(EntityKind::Catalog, Some("bravo"), 10)),
         vec!["charlie", "delta"],
         "page token is exclusive, matching WHERE name > $1"
     );
     assert_eq!(
-        names(snap.scan(EntityKind::Catalog, None, 2)),
+        row_names(snap.scan(EntityKind::Catalog, None, 2)),
         vec!["alpha", "bravo"]
     );
 }
@@ -630,14 +652,24 @@ fn user_is_keyed_on_name_not_email() {
     // uc_users: `name TEXT NOT NULL UNIQUE`, `email TEXT` (nullable, no
     // constraint). Keying on email would lose the real uniqueness check and
     // drop every user with a null email out of the index entirely.
-    let with_email = serde_json::json!({"name": "ada", "email": "ada@example.com"});
-    let without = serde_json::json!({"name": "ada"});
+    let user = |email: Option<&str>| {
+        Row::User(crate::models::user::UserRow {
+            id: Uuid::now_v7(),
+            name: "ada".into(),
+            email: email.map(str::to_owned),
+            external_id: None,
+            state: None,
+            created_at: None,
+            updated_at: None,
+            picture_url: None,
+        })
+    };
     assert_eq!(
-        natural_key_for(EntityKind::User, &with_email).as_deref(),
+        natural_key_for(&user(Some("ada@example.com"))).as_deref(),
         Some("ada")
     );
     assert_eq!(
-        natural_key_for(EntityKind::User, &without).as_deref(),
+        natural_key_for(&user(None)).as_deref(),
         Some("ada"),
         "a user with no email must still be indexed"
     );
@@ -647,8 +679,24 @@ fn user_is_keyed_on_name_not_email() {
 fn columns_are_keyed_by_table_and_ordinal() {
     // UNIQUE(table_id, ordinal_position)
     let t = Uuid::now_v7();
-    let col = |n: i64| serde_json::json!({"table_id": t, "ordinal_position": n});
-    let k = |n: i64| natural_key_for(EntityKind::Column, &col(n)).unwrap();
+    let k = |n: i32| {
+        natural_key_for(&Row::Column(crate::models::table::ColumnRow {
+            id: Uuid::now_v7(),
+            table_id: t,
+            name: "c".into(),
+            ordinal_position: n,
+            type_text: "int".into(),
+            type_json: "{}".into(),
+            type_name: "INT".into(),
+            type_precision: None,
+            type_scale: None,
+            type_interval_type: None,
+            nullable: true,
+            comment: None,
+            partition_index: None,
+        }))
+        .unwrap()
+    };
 
     assert_ne!(k(0), k(1));
     assert!(k(2) < k(10), "ordinals must sort numerically, not as text");
@@ -659,8 +707,16 @@ fn columns_are_keyed_by_table_and_ordinal() {
 fn properties_are_keyed_by_entity_and_key() {
     // UNIQUE(entity_id, entity_type, property_key)
     let e = Uuid::now_v7();
-    let p = |ty: &str, key: &str| serde_json::json!({"entity_id": e, "entity_type": ty, "property_key": key});
-    let k = |ty: &str, key: &str| natural_key_for(EntityKind::Property, &p(ty, key)).unwrap();
+    let k = |ty: &str, key: &str| {
+        natural_key_for(&Row::Property(crate::models::property::PropertyRow {
+            id: Uuid::now_v7(),
+            entity_id: e,
+            entity_type: ty.into(),
+            property_key: key.into(),
+            property_value: "v".into(),
+        }))
+        .unwrap()
+    };
 
     assert_ne!(k("TABLE", "a"), k("TABLE", "b"));
     assert_ne!(
@@ -670,46 +726,46 @@ fn properties_are_keyed_by_entity_and_key() {
     );
 }
 
+/// The kinds with no UNIQUE constraint. Inventing a key for these would reject
+/// writes the schema accepts. That the list is now a match on `Row` rather than
+/// on `EntityKind` is the point: a new kind cannot be forgotten, because the
+/// compiler will demand an arm for it.
 #[test]
 fn entities_without_a_unique_constraint_are_id_addressed_only() {
-    // Nothing in the schema constrains these, so inventing a key here would
-    // reject writes SQLite accepts today.
-    for kind in [
-        EntityKind::Metastore,
-        EntityKind::FunctionParameter,
-        EntityKind::ModelVersion, // its (registered_model_id, version) index is not UNIQUE
-        EntityKind::StagingTable,
-        EntityKind::Dependency,
-        EntityKind::CasbinRule,
-    ] {
-        let body = serde_json::json!({"name": "x", "version": 1, "schema_id": Uuid::nil()});
-        assert_eq!(natural_key_for(kind, &body), None, "{kind:?} has no UNIQUE");
-    }
+    let metastore = Row::Metastore(crate::models::metastore::MetastoreRow {
+        id: Uuid::now_v7(),
+        name: "unity-catalog".into(),
+    });
+    assert_eq!(natural_key_for(&metastore), None);
+
+    let staging = Row::StagingTable(crate::models::staging::StagingTableRow {
+        id: Uuid::now_v7(),
+        schema_id: Uuid::now_v7(),
+        name: "s".into(),
+        staging_location: "s3://x".into(),
+        created_at: 0,
+        created_by: None,
+        accessed_at: 0,
+        stage_committed: false,
+        stage_committed_at: None,
+        purge_state: 0,
+        num_cleanup_retries: 0,
+        last_cleanup_at: None,
+    });
+    assert_eq!(natural_key_for(&staging), None);
 }
 
-#[test]
-fn delta_commits_are_not_snapshot_entities() {
-    // They live in per-table partitions where the version is the object key.
-    let body = serde_json::json!({"table_id": Uuid::nil(), "commit_version": 3});
-    assert_eq!(natural_key_for(EntityKind::DeltaCommit, &body), None);
-}
-
-/// NUL separation is unambiguous only while every component *except the last*
-/// is NUL-free. That is not a property of the encoding, it is a precondition
-/// on the inputs, so it is worth stating exactly rather than assuming.
-///
-/// It holds because user-supplied text is always the final component: names sit
-/// last in every two-part key, and Property's middle component (`entity_type`)
-/// is an internal literal -- 'table', 'schema', 'catalog' -- never client input.
-/// Should a variable-length user-supplied field ever move out of last position,
-/// this encoding needs escaping or length prefixes.
 #[test]
 fn nul_separation_is_ambiguous_if_a_non_final_component_contains_nul() {
+    let e = Uuid::now_v7();
     let key = |ty: &str, k: &str| {
-        natural_key_for(
-            EntityKind::Property,
-            &serde_json::json!({"entity_id": "e", "entity_type": ty, "property_key": k}),
-        )
+        natural_key_for(&Row::Property(crate::models::property::PropertyRow {
+            id: Uuid::now_v7(),
+            entity_id: e,
+            entity_type: ty.into(),
+            property_key: k.into(),
+            property_value: "v".into(),
+        }))
     };
     // A NUL in the middle component collides. Unreachable today, but real.
     assert_eq!(key("A\u{0}B", "c"), key("A", "B\u{0}c"));

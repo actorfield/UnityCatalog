@@ -2,14 +2,14 @@
 
 use crate::models::property::PropertyRow;
 use crate::store::action::{Action, EntityKind};
+use crate::store::row::Row;
 use crate::store::Store;
 use std::collections::HashMap;
 use uc_errors::{ErrorCode, UcError};
 use uuid::Uuid;
 
-fn row_of(v: &serde_json::Value) -> Result<PropertyRow, UcError> {
-    serde_json::from_value(v.clone())
-        .map_err(|e| UcError::new(ErrorCode::Internal, format!("corrupt property row: {e}")))
+fn row_of(v: &Row) -> Result<PropertyRow, UcError> {
+    crate::typed_row!(v, Row::Property, "property")
 }
 
 /// UNIQUE(entity_id, entity_type, property_key); this is the group prefix.

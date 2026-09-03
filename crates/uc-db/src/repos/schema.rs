@@ -2,13 +2,13 @@
 
 use crate::models::schema::SchemaRow;
 use crate::store::action::{Action, EntityKind};
+use crate::store::row::Row;
 use crate::store::{Snapshot, Store};
 use uc_errors::{ErrorCode, UcError};
 use uuid::Uuid;
 
-fn row_of(v: &serde_json::Value) -> Result<SchemaRow, UcError> {
-    serde_json::from_value(v.clone())
-        .map_err(|e| UcError::new(ErrorCode::Internal, format!("corrupt schema row: {e}")))
+fn row_of(v: &Row) -> Result<SchemaRow, UcError> {
+    crate::typed_row!(v, Row::Schema, "schema")
 }
 
 /// UNIQUE(catalog_id, name), rendered as the store's natural key.
@@ -91,8 +91,7 @@ pub async fn get_by_full_name(
     let catalog = snap
         .get_by_natural_key(EntityKind::Catalog, catalog_name)
         .ok_or_else(not_found)?;
-    let catalog_id: Uuid = serde_json::from_value(catalog["id"].clone())
-        .map_err(|e| UcError::new(ErrorCode::Internal, format!("corrupt catalog row: {e}")))?;
+    let catalog_id = crate::typed_row!(catalog, Row::Catalog, "catalog")?.id;
 
     snap.get_by_natural_key(EntityKind::Schema, &nk(catalog_id, schema_name))
         .ok_or_else(not_found)

@@ -2,13 +2,13 @@
 
 use crate::models::casbin::CasbinRule;
 use crate::store::action::{Action, EntityKind};
+use crate::store::row::Row;
 use crate::store::Store;
 use uc_errors::{ErrorCode, UcError};
 use uuid::Uuid;
 
-fn rule_of(v: &serde_json::Value) -> Result<CasbinRule, UcError> {
-    serde_json::from_value(v.clone())
-        .map_err(|e| UcError::new(ErrorCode::Internal, format!("corrupt casbin rule: {e}")))
+fn rule_of(v: &Row) -> Result<CasbinRule, UcError> {
+    crate::typed_row!(v, Row::CasbinRule, "casbin rule")
 }
 
 fn body_of(rule: &CasbinRule) -> Result<serde_json::Value, UcError> {

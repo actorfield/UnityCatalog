@@ -3,17 +3,13 @@
 
 use crate::models::external_location::ExternalLocationRow;
 use crate::store::action::{Action, EntityKind};
+use crate::store::row::Row;
 use crate::store::Store;
 use uc_errors::{ErrorCode, UcError};
 use uuid::Uuid;
 
-fn row_of(v: &serde_json::Value) -> Result<ExternalLocationRow, UcError> {
-    serde_json::from_value(v.clone()).map_err(|e| {
-        UcError::new(
-            ErrorCode::Internal,
-            format!("corrupt external location row: {e}"),
-        )
-    })
+fn row_of(v: &Row) -> Result<ExternalLocationRow, UcError> {
+    crate::typed_row!(v, Row::ExternalLocation, "external location")
 }
 
 pub async fn create(

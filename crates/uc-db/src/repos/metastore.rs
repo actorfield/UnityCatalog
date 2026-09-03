@@ -2,13 +2,13 @@
 
 use crate::models::metastore::MetastoreRow;
 use crate::store::action::{Action, EntityKind};
+use crate::store::row::Row;
 use crate::store::Store;
 use uc_errors::{ErrorCode, UcError};
 use uuid::Uuid;
 
-fn row_of(v: &serde_json::Value) -> Result<MetastoreRow, UcError> {
-    serde_json::from_value(v.clone())
-        .map_err(|e| UcError::new(ErrorCode::Internal, format!("corrupt metastore row: {e}")))
+fn row_of(v: &Row) -> Result<MetastoreRow, UcError> {
+    crate::typed_row!(v, Row::Metastore, "metastore")
 }
 
 /// Get the singleton metastore row, creating it if absent.

@@ -2,18 +2,17 @@
 
 use crate::models::table::{ColumnRow, TableRow};
 use crate::store::action::{Action, EntityKind};
+use crate::store::row::Row;
 use crate::store::Store;
 use uc_errors::{ErrorCode, UcError};
 use uuid::Uuid;
 
-fn table_of(v: &serde_json::Value) -> Result<TableRow, UcError> {
-    serde_json::from_value(v.clone())
-        .map_err(|e| UcError::new(ErrorCode::Internal, format!("corrupt table row: {e}")))
+fn table_of(v: &Row) -> Result<TableRow, UcError> {
+    crate::typed_row!(v, Row::Table, "table")
 }
 
-fn column_of(v: &serde_json::Value) -> Result<ColumnRow, UcError> {
-    serde_json::from_value(v.clone())
-        .map_err(|e| UcError::new(ErrorCode::Internal, format!("corrupt column row: {e}")))
+fn column_of(v: &Row) -> Result<ColumnRow, UcError> {
+    crate::typed_row!(v, Row::Column, "column")
 }
 
 /// UNIQUE(schema_id, name)

@@ -2,18 +2,17 @@
 
 use crate::models::function::{FunctionParamRow, FunctionRow};
 use crate::store::action::{Action, EntityKind};
+use crate::store::row::Row;
 use crate::store::Store;
 use uc_errors::{ErrorCode, UcError};
 use uuid::Uuid;
 
-fn fn_of(v: &serde_json::Value) -> Result<FunctionRow, UcError> {
-    serde_json::from_value(v.clone())
-        .map_err(|e| UcError::new(ErrorCode::Internal, format!("corrupt function row: {e}")))
+fn fn_of(v: &Row) -> Result<FunctionRow, UcError> {
+    crate::typed_row!(v, Row::Function, "function")
 }
 
-fn param_of(v: &serde_json::Value) -> Result<FunctionParamRow, UcError> {
-    serde_json::from_value(v.clone())
-        .map_err(|e| UcError::new(ErrorCode::Internal, format!("corrupt function param: {e}")))
+fn param_of(v: &Row) -> Result<FunctionParamRow, UcError> {
+    crate::typed_row!(v, Row::FunctionParameter, "function parameter")
 }
 
 /// UNIQUE(schema_id, name)

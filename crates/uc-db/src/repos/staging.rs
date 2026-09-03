@@ -2,13 +2,13 @@
 
 use crate::models::staging::StagingTableRow;
 use crate::store::action::{Action, EntityKind};
+use crate::store::row::Row;
 use crate::store::Store;
 use uc_errors::{ErrorCode, UcError};
 use uuid::Uuid;
 
-fn row_of(v: &serde_json::Value) -> Result<StagingTableRow, UcError> {
-    serde_json::from_value(v.clone())
-        .map_err(|e| UcError::new(ErrorCode::Internal, format!("corrupt staging row: {e}")))
+fn row_of(v: &Row) -> Result<StagingTableRow, UcError> {
+    crate::typed_row!(v, Row::StagingTable, "staging table")
 }
 
 pub async fn create(store: &Store, row: &StagingTableRow) -> Result<StagingTableRow, UcError> {

@@ -23,6 +23,12 @@ use uc_errors::{ErrorCode, UcError};
 use uuid::Uuid;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+/// The kinds a snapshot can hold.
+///
+/// Deliberately not every table the old schema had. Delta commits live in
+/// per-table log partitions where the version is the object key, so they are
+/// never resident; and `uc_dependencies` had no repository and nothing ever
+/// wrote it. Typing the storage is what surfaced both.
 #[serde(rename_all = "snake_case")]
 pub enum EntityKind {
     Metastore,
@@ -36,12 +42,10 @@ pub enum EntityKind {
     RegisteredModel,
     ModelVersion,
     StagingTable,
-    DeltaCommit,
     User,
     Credential,
     ExternalLocation,
     Property,
-    Dependency,
     CasbinRule,
 }
 

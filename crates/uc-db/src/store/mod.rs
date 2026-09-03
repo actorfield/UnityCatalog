@@ -9,6 +9,7 @@ pub mod actor;
 pub mod delta_log;
 pub mod log;
 pub mod memory;
+pub mod row;
 #[cfg(feature = "s3")]
 pub mod s3;
 
@@ -17,6 +18,7 @@ mod tests;
 
 use action::{Action, CommitInfo, EntityKind, Line};
 use log::{LastCheckpoint, ObjectLog, PutResult, MAX_COMMIT_ATTEMPTS};
+use row::Row;
 use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 use tokio::sync::RwLock;
@@ -25,14 +27,15 @@ use uuid::Uuid;
 
 /// The materialised state at a particular log version.
 ///
-/// Rows are held as `serde_json::Value` rather than typed structs so one
-/// snapshot serves all 18 entity kinds without a trait object per kind. Repo
-/// functions deserialise into their own `*Row` on the way out, which is the
-/// same boundary `FromRow` occupied before.
+/// Rows are held as a typed `Row` enum. They were `serde_json::Value`, which
+/// cost twice: every row carried a heap-allocated `String` per field name, and
+/// every read paid a `from_value` to get a typed struct back. The wire format
+/// is unchanged — `Row` is constructed on the way in and matched on the way
+/// out.
 #[derive(Default)]
 pub struct Snapshot {
     pub version: u64,
-    entities: HashMap<EntityKind, HashMap<Uuid, serde_json::Value>>,
+    entities: HashMap<EntityKind, HashMap<Uuid, Row>>,
     /// Natural-key index: `(kind, composite)` where `composite` is the SQL
     /// UNIQUE tuple rendered in sort order.
     ///
@@ -43,7 +46,7 @@ pub struct Snapshot {
 }
 
 impl Snapshot {
-    pub fn get(&self, kind: EntityKind, id: Uuid) -> Option<&serde_json::Value> {
+    pub fn get(&self, kind: EntityKind, id: Uuid) -> Option<&Row> {
         self.entities.get(&kind)?.get(&id)
     }
 
@@ -51,19 +54,14 @@ impl Snapshot {
         self.by_natural_key.get(&(kind, key.to_string())).copied()
     }
 
-    pub fn get_by_natural_key(&self, kind: EntityKind, key: &str) -> Option<&serde_json::Value> {
+    pub fn get_by_natural_key(&self, kind: EntityKind, key: &str) -> Option<&Row> {
         let id = self.by_natural_key.get(&(kind, key.to_string()))?;
         self.get(kind, *id)
     }
 
     /// Ordered scan for cursor pagination. `after` is exclusive, matching
     /// `WHERE name > $token`.
-    pub fn scan(
-        &self,
-        kind: EntityKind,
-        after: Option<&str>,
-        limit: usize,
-    ) -> Vec<&serde_json::Value> {
+    pub fn scan(&self, kind: EntityKind, after: Option<&str>, limit: usize) -> Vec<&Row> {
         let lower = after.map(str::to_owned).unwrap_or_default();
         self.by_natural_key
             .range((kind, lower)..)
@@ -85,7 +83,7 @@ impl Snapshot {
         prefix: &str,
         after: Option<&str>,
         limit: usize,
-    ) -> Vec<&serde_json::Value> {
+    ) -> Vec<&Row> {
         let start = format!("{prefix}{}", after.unwrap_or(""));
         self.by_natural_key
             .range((kind, start)..)
@@ -104,7 +102,7 @@ impl Snapshot {
     /// For the handful of lookups that hit a non-UNIQUE column and so have no
     /// natural-key index to ride on. Linear, deliberately: adding a secondary
     /// index for each would cost more than it saves at these row counts.
-    pub fn iter(&self, kind: EntityKind) -> impl Iterator<Item = &serde_json::Value> {
+    pub fn iter(&self, kind: EntityKind) -> impl Iterator<Item = &Row> {
         self.entities
             .get(&kind)
             .into_iter()
@@ -128,8 +126,8 @@ impl Snapshot {
     ///
     /// With UUIDv7 ids that is creation order, which is what stands in for the
     /// SQL `ORDER BY id` on an AUTOINCREMENT surrogate.
-    pub fn iter_by_id(&self, kind: EntityKind) -> Vec<(Uuid, &serde_json::Value)> {
-        let mut rows: Vec<(Uuid, &serde_json::Value)> = self
+    pub fn iter_by_id(&self, kind: EntityKind) -> Vec<(Uuid, &Row)> {
+        let mut rows: Vec<(Uuid, &Row)> = self
             .entities
             .get(&kind)
             .into_iter()
@@ -152,32 +150,39 @@ impl Snapshot {
 
     /// Apply one action. Must be deterministic and total — replay correctness
     /// depends on identical input producing identical state.
-    fn apply(&mut self, act: &Action) {
+    fn apply(&mut self, act: &Action) -> Result<(), UcError> {
         match act {
             Action::Upsert { kind, id, body } => {
+                // A body that does not match its kind is fatal rather than
+                // skipped: at replay it means the log and this build disagree.
+                let row = match row::from_body(*kind, body) {
+                    Ok(row) => row,
+                    Err(e) => {
+                        tracing::error!(?kind, %id, error = %e, "refusing a malformed row");
+                        return Err(e);
+                    }
+                };
                 // Rename: drop the stale natural-key entry before inserting the
                 // new one, or the old name stays reachable forever.
                 if let Some(prev) = self.get(*kind, *id) {
-                    if let Some(old) = natural_key_for(*kind, prev) {
+                    if let Some(old) = natural_key_for(prev) {
                         self.by_natural_key.remove(&(*kind, old));
                     }
                 }
-                if let Some(nk) = natural_key_for(*kind, body) {
+                if let Some(nk) = natural_key_for(&row) {
                     self.by_natural_key.insert((*kind, nk), *id);
                 }
-                self.entities
-                    .entry(*kind)
-                    .or_default()
-                    .insert(*id, body.clone());
+                self.entities.entry(*kind).or_default().insert(*id, row);
             }
             Action::Remove { kind, id } => {
                 if let Some(prev) = self.entities.entry(*kind).or_default().remove(id) {
-                    if let Some(nk) = natural_key_for(*kind, &prev) {
+                    if let Some(nk) = natural_key_for(&prev) {
                         self.by_natural_key.remove(&(*kind, nk));
                     }
                 }
             }
         }
+        Ok(())
     }
 
     /// Fold the whole snapshot into JSONL upserts — the checkpoint body.
@@ -199,10 +204,13 @@ impl Snapshot {
             let mut ids: Vec<_> = table.keys().copied().collect();
             ids.sort();
             for id in ids {
+                let Some(row) = table.get(&id) else {
+                    continue;
+                };
                 let line = Line::Upsert {
                     kind,
                     id,
-                    body: table[&id].clone(),
+                    body: row.to_body()?,
                 };
                 out.extend(
                     serde_json::to_vec(&line)
@@ -235,7 +243,7 @@ impl Snapshot {
             })?;
             match line {
                 Line::Upsert { kind, id, body } => {
-                    snap.apply(&Action::Upsert { kind, id, body });
+                    snap.apply(&Action::Upsert { kind, id, body })?;
                 }
                 // A checkpoint is a state dump. Anything else means the writer
                 // and reader disagree about the format.
@@ -334,7 +342,10 @@ impl StoreInner {
         }
         for (version, _info, actions) in log::read_commits_after(&*self.log, state.version).await? {
             for act in &actions {
-                state.apply(act);
+                // Refuse rather than skip: a row this build cannot read means
+                // the log and the binary disagree, and continuing would
+                // materialise state that was never committed.
+                state.apply(act)?;
             }
             state.version = version;
         }
@@ -404,7 +415,13 @@ impl StoreInner {
                     // only apply when we are still the next in line.
                     if state.version + 1 == target {
                         for act in &actions {
-                            state.apply(act);
+                            // These actions were serialised from typed rows a
+                            // moment ago, so this can only fail if the
+                            // round-trip itself is broken. The commit is
+                            // already durable either way; surfacing the error
+                            // leaves the snapshot to be rebuilt by the next
+                            // catch_up rather than quietly diverging.
+                            state.apply(act)?;
                         }
                         state.version = target;
                     }
@@ -481,68 +498,55 @@ impl StoreInner {
 ///
 /// NUL as separator because it cannot appear in a UC identifier, so
 /// ("a\u{0}b", "c") cannot collide with ("a", "b\u{0}c").
-fn natural_key_for(kind: EntityKind, body: &serde_json::Value) -> Option<String> {
-    let s = |f: &str| body.get(f).and_then(|v| v.as_str()).map(str::to_owned);
-    let i = |f: &str| body.get(f).and_then(|v| v.as_i64());
-    match kind {
+fn natural_key_for(row: &Row) -> Option<String> {
+    // NUL as separator because it cannot appear in a UC identifier. See the
+    // note in docs/log-structured-metadata.md on why that is a precondition on
+    // the inputs rather than a property of the encoding.
+    match row {
         // uc_catalogs.name UNIQUE
-        EntityKind::Catalog => s("name"),
+        Row::Catalog(r) => Some(r.name.clone()),
         // UNIQUE(catalog_id, name)
-        EntityKind::Schema => Some(format!("{}\u{0}{}", s("catalog_id")?, s("name")?)),
+        Row::Schema(r) => Some(format!("{}\u{0}{}", r.catalog_id, r.name)),
         // UNIQUE(schema_id, name)
-        EntityKind::Table => Some(format!("{}\u{0}{}", s("schema_id")?, s("name")?)),
-        EntityKind::Volume => Some(format!("{}\u{0}{}", s("schema_id")?, s("name")?)),
-        EntityKind::Function => Some(format!("{}\u{0}{}", s("schema_id")?, s("name")?)),
-        EntityKind::RegisteredModel => Some(format!("{}\u{0}{}", s("schema_id")?, s("name")?)),
-        // UNIQUE(table_id, ordinal_position). Zero-padded and sign-prefixed so
-        // the index also serves "columns of this table, in ordinal order",
-        // which is how every caller reads them.
-        EntityKind::Column => Some(format!(
+        Row::Table(r) => Some(format!("{}\u{0}{}", r.schema_id, r.name)),
+        Row::Volume(r) => Some(format!("{}\u{0}{}", r.schema_id, r.name)),
+        Row::Function(r) => Some(format!("{}\u{0}{}", r.schema_id, r.name)),
+        Row::RegisteredModel(r) => Some(format!("{}\u{0}{}", r.schema_id, r.name)),
+        // UNIQUE(table_id, ordinal_position). Padded so the index also serves
+        // "columns of this table, in ordinal order", which is how they read.
+        Row::Column(r) => Some(format!(
             "{}\u{0}{}",
-            s("table_id")?,
-            pad_i64(i("ordinal_position")?)
+            r.table_id,
+            pad_i64(i64::from(r.ordinal_position))
         )),
         // UNIQUE(entity_id, entity_type, property_key)
-        EntityKind::Property => Some(format!(
+        Row::Property(r) => Some(format!(
             "{}\u{0}{}\u{0}{}",
-            s("entity_id")?,
-            s("entity_type")?,
-            s("property_key")?
+            r.entity_id, r.entity_type, r.property_key
         )),
-        // uc_users.name UNIQUE. NOT email: that column is nullable and carries
-        // no constraint, so keying on it would both lose the real uniqueness
-        // check and drop every user with a null email out of the index.
-        EntityKind::User => s("name"),
-        // uc_credentials.name UNIQUE
-        EntityKind::Credential => s("name"),
-        // uc_external_locations.name UNIQUE
-        EntityKind::ExternalLocation => s("name"),
-        // Delta commits are not held in the snapshot at all -- they live in
-        // per-table partitions where the version is the object key. See
-        // store::delta_log.
-        EntityKind::DeltaCommit => None,
-        // No UNIQUE constraint in the schema, so id-addressed only:
-        // uc_metastore, uc_function_parameters, uc_model_versions (its
-        // (registered_model_id, version) index is not unique),
-        // uc_staging_tables, uc_dependencies, casbin_rule.
+        // uc_users.name UNIQUE. Not email: that column is nullable and carries
+        // no constraint.
+        Row::User(r) => Some(r.name.clone()),
+        Row::Credential(r) => Some(r.name.clone()),
+        Row::ExternalLocation(r) => Some(r.name.clone()),
         // UNIQUE INDEX idx_casbin_rule ON casbin_rule(ptype, v0..v5)
-        EntityKind::CasbinRule => Some(
+        Row::CasbinRule(r) => Some(
             [
-                s("ptype")?,
-                s("v0")?,
-                s("v1")?,
-                s("v2")?,
-                s("v3")?,
-                s("v4")?,
-                s("v5")?,
+                r.ptype.as_str(),
+                r.v0.as_str(),
+                r.v1.as_str(),
+                r.v2.as_str(),
+                r.v3.as_str(),
+                r.v4.as_str(),
+                r.v5.as_str(),
             ]
             .join("\u{0}"),
         ),
-        EntityKind::Metastore
-        | EntityKind::FunctionParameter
-        | EntityKind::ModelVersion
-        | EntityKind::StagingTable
-        | EntityKind::Dependency => None,
+        // No UNIQUE constraint in the schema, so id-addressed only.
+        Row::Metastore(_)
+        | Row::FunctionParameter(_)
+        | Row::ModelVersion(_)
+        | Row::StagingTable(_) => None,
     }
 }
 

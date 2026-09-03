@@ -2,13 +2,13 @@
 
 use crate::models::user::UserRow;
 use crate::store::action::{Action, EntityKind};
+use crate::store::row::Row;
 use crate::store::{Snapshot, Store};
 use uc_errors::{ErrorCode, UcError};
 use uuid::Uuid;
 
-fn row_of(v: &serde_json::Value) -> Result<UserRow, UcError> {
-    serde_json::from_value(v.clone())
-        .map_err(|e| UcError::new(ErrorCode::Internal, format!("corrupt user row: {e}")))
+fn row_of(v: &Row) -> Result<UserRow, UcError> {
+    crate::typed_row!(v, Row::User, "user")
 }
 
 /// uc_users.name is the UNIQUE column. `email` and `external_id` carry no

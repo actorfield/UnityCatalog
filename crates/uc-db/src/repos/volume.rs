@@ -2,13 +2,13 @@
 
 use crate::models::volume::VolumeRow;
 use crate::store::action::{Action, EntityKind};
+use crate::store::row::Row;
 use crate::store::Store;
 use uc_errors::{ErrorCode, UcError};
 use uuid::Uuid;
 
-fn row_of(v: &serde_json::Value) -> Result<VolumeRow, UcError> {
-    serde_json::from_value(v.clone())
-        .map_err(|e| UcError::new(ErrorCode::Internal, format!("corrupt volume row: {e}")))
+fn row_of(v: &Row) -> Result<VolumeRow, UcError> {
+    crate::typed_row!(v, Row::Volume, "volume")
 }
 
 /// UNIQUE(schema_id, name)

@@ -2,18 +2,17 @@
 
 use crate::models::model::{ModelVersionRow, RegisteredModelRow};
 use crate::store::action::{Action, EntityKind};
+use crate::store::row::Row;
 use crate::store::Store;
 use uc_errors::{ErrorCode, UcError};
 use uuid::Uuid;
 
-fn model_of(v: &serde_json::Value) -> Result<RegisteredModelRow, UcError> {
-    serde_json::from_value(v.clone())
-        .map_err(|e| UcError::new(ErrorCode::Internal, format!("corrupt model row: {e}")))
+fn model_of(v: &Row) -> Result<RegisteredModelRow, UcError> {
+    crate::typed_row!(v, Row::RegisteredModel, "registered model")
 }
 
-fn version_of(v: &serde_json::Value) -> Result<ModelVersionRow, UcError> {
-    serde_json::from_value(v.clone())
-        .map_err(|e| UcError::new(ErrorCode::Internal, format!("corrupt model version: {e}")))
+fn version_of(v: &Row) -> Result<ModelVersionRow, UcError> {
+    crate::typed_row!(v, Row::ModelVersion, "model version")
 }
 
 /// UNIQUE(schema_id, name)

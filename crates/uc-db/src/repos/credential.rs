@@ -2,13 +2,13 @@
 
 use crate::models::credential::CredentialRow;
 use crate::store::action::{Action, EntityKind};
+use crate::store::row::Row;
 use crate::store::Store;
 use uc_errors::{ErrorCode, UcError};
 use uuid::Uuid;
 
-fn row_of(v: &serde_json::Value) -> Result<CredentialRow, UcError> {
-    serde_json::from_value(v.clone())
-        .map_err(|e| UcError::new(ErrorCode::Internal, format!("corrupt credential row: {e}")))
+fn row_of(v: &Row) -> Result<CredentialRow, UcError> {
+    crate::typed_row!(v, Row::Credential, "credential")
 }
 
 pub async fn create(store: &Store, row: &CredentialRow) -> Result<CredentialRow, UcError> {
