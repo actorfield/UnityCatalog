@@ -38,7 +38,7 @@ pub async fn create(
         require(&state, user.id, schema.id, Privilege::CreateFunction).await?;
     }
     validate_sql_name(&fi.name)?;
-    let id = Uuid::new_v4();
+    let id = Uuid::now_v7();
     let now = now_ms();
     let row = FunctionRow {
         id,
@@ -73,11 +73,11 @@ pub async fn create(
                 .iter()
                 .enumerate()
                 .map(|(i, p)| FunctionParamRow {
-                    id: Uuid::new_v4(),
+                    id: Uuid::now_v7(),
                     function_id: id,
                     name: p.name.clone(),
                     input_or_return: 0,
-                    ordinal_position: i as i32,
+                    ordinal_position: i32::try_from(i).unwrap_or(i32::MAX),
                     type_text: p.type_text.clone(),
                     type_json: p.type_json.clone(),
                     type_name: p
@@ -127,7 +127,13 @@ pub async fn list(
 ) -> Result<Json<ListFunctionsResponse>, UcError> {
     let schema =
         schema::get_by_full_name(&state.pool, &params.catalog_name, &params.schema_name).await?;
-    let max = params.max_results.unwrap_or(50).min(1000);
+    // A non-positive max_results means "unspecified", not "an empty page". It
+    // used to reach the repo layer and underflow there.
+    let max = params
+        .max_results
+        .filter(|n| *n > 0)
+        .unwrap_or(50)
+        .min(1000);
     let (rows, next_token) =
         function::list(&state.pool, schema.id, params.page_token.as_deref(), max).await?;
     // #1105: filter to only functions the caller can see when auth is enabled
@@ -136,12 +142,12 @@ pub async fn list(
     } else {
         None
     };
-    let visible_ids: std::collections::HashSet<uuid::Uuid> = if state.auth_enabled {
-        crate::catalog_api::helpers::filter_visible(
+    let visible_ids: std::collections::HashSet<Uuid> = if state.auth_enabled {
+        filter_visible(
             &state,
             principal,
             rows.iter().map(|r| (r.id, ())).collect(),
-            uc_types::Privilege::Execute,
+            Privilege::Execute,
         )
         .await?
         .into_iter()

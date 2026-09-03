@@ -18,10 +18,10 @@ pub fn split2(s: &str) -> Result<(&str, &str), UcError> {
 
 pub fn split3(s: &str) -> Result<(&str, &str, &str), UcError> {
     let v: Vec<&str> = s.splitn(3, '.').collect();
-    if v.len() != 3 {
+    let [catalog, schema, name] = v.as_slice() else {
         return Err(UcError::invalid_argument("expected catalog.schema.name"));
-    }
-    Ok((v[0], v[1], v[2]))
+    };
+    Ok((catalog, schema, name))
 }
 
 /// Resolve a caller's `sub` claim to a `uc_users` row. Tries `email` first

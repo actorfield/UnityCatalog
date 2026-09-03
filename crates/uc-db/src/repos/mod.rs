@@ -1,3 +1,6 @@
+//! Repo layer over the log-structured store.
+
+pub mod casbin;
 pub mod catalog;
 pub mod credential;
 pub mod delta;

@@ -1,171 +1,266 @@
-use crate::{
-    models::table::{ColumnRow, TableRow},
-    pool::AnyPool,
-};
+//! Log-structured body for repos::table. Signatures identical to table.rs.
+
+use crate::models::table::{ColumnRow, TableRow};
+use crate::store::action::{Action, EntityKind};
+use crate::store::row::Row;
+use crate::store::Store;
 use uc_errors::{ErrorCode, UcError};
 use uuid::Uuid;
 
-pub async fn create(pool: &AnyPool, row: &TableRow) -> Result<TableRow, UcError> {
-    sqlx::query_as::<_, TableRow>(
-        "INSERT INTO uc_tables (id, schema_id, name, type, owner, created_at, created_by,
-              data_source_format, comment, url, column_count, view_definition)
-             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
-             RETURNING *",
-    )
-    .bind(row.id)
-    .bind(row.schema_id)
-    .bind(&row.name)
-    .bind(&row.r#type)
-    .bind(&row.owner)
-    .bind(row.created_at)
-    .bind(&row.created_by)
-    .bind(&row.data_source_format)
-    .bind(&row.comment)
-    .bind(&row.url)
-    .bind(row.column_count)
-    .bind(&row.view_definition)
-    .fetch_one(pool)
-    .await
-    .map_err(|e| match e {
-        sqlx::Error::Database(ref db) if db.is_unique_violation() => UcError::new(
-            ErrorCode::TableAlreadyExists,
-            format!("Table '{}' already exists", row.name),
-        ),
-        other => crate::sqlx_err(other),
-    })
+fn table_of(v: &Row) -> Result<TableRow, UcError> {
+    crate::typed_row!(v, Row::Table, "table")
 }
 
-pub async fn get_by_id(pool: &AnyPool, id: Uuid) -> Result<TableRow, UcError> {
-    sqlx::query_as::<_, TableRow>("SELECT * FROM uc_tables WHERE id = $1")
-        .bind(id)
-        .fetch_one(pool)
+fn column_of(v: &Row) -> Result<ColumnRow, UcError> {
+    crate::typed_row!(v, Row::Column, "column")
+}
+
+/// UNIQUE(schema_id, name)
+fn nk(schema_id: Uuid, name: &str) -> String {
+    format!("{schema_id}\u{0}{name}")
+}
+
+fn schema_prefix(schema_id: Uuid) -> String {
+    format!("{schema_id}\u{0}")
+}
+
+/// Columns are keyed (table_id, ordinal_position); this is the group prefix.
+fn column_prefix(table_id: Uuid) -> String {
+    format!("{table_id}\u{0}")
+}
+
+pub async fn create(store: &Store, row: &TableRow) -> Result<TableRow, UcError> {
+    let row = row.clone();
+    store
+        .commit("CREATE TABLE", |snap| {
+            if snap
+                .get_by_natural_key(EntityKind::Table, &nk(row.schema_id, &row.name))
+                .is_some()
+            {
+                return Err(UcError::new(
+                    ErrorCode::TableAlreadyExists,
+                    format!("Table '{}' already exists", row.name),
+                ));
+            }
+            let body = serde_json::to_value(&row)
+                .map_err(|e| UcError::new(ErrorCode::Internal, e.to_string()))?;
+            Ok((
+                vec![Action::Upsert {
+                    kind: EntityKind::Table,
+                    id: row.id,
+                    body,
+                }],
+                row.clone(),
+            ))
+        })
         .await
-        .map_err(|e| match e {
-            sqlx::Error::RowNotFound => UcError::new(
+}
+
+pub async fn get_by_id(store: &Store, id: Uuid) -> Result<TableRow, UcError> {
+    let snap = store.snapshot().await;
+    snap.get(EntityKind::Table, id)
+        .ok_or_else(|| {
+            UcError::new(
                 ErrorCode::TableNotFound,
                 format!("Table '{}' not found", id),
-            ),
-            other => crate::sqlx_err(other),
+            )
         })
+        .and_then(table_of)
 }
 
 pub async fn get_by_schema_and_name(
-    pool: &AnyPool,
+    store: &Store,
     schema_id: Uuid,
     name: &str,
 ) -> Result<TableRow, UcError> {
-    sqlx::query_as::<_, TableRow>("SELECT * FROM uc_tables WHERE schema_id = $1 AND name = $2")
-        .bind(schema_id)
-        .bind(name)
-        .fetch_one(pool)
-        .await
-        .map_err(|e| match e {
-            sqlx::Error::RowNotFound => UcError::new(
+    let snap = store.snapshot().await;
+    snap.get_by_natural_key(EntityKind::Table, &nk(schema_id, name))
+        .ok_or_else(|| {
+            UcError::new(
                 ErrorCode::TableNotFound,
                 format!("Table '{}' not found", name),
-            ),
-            other => crate::sqlx_err(other),
+            )
         })
+        .and_then(table_of)
 }
 
 pub async fn list(
-    pool: &AnyPool,
+    store: &Store,
     schema_id: Uuid,
     page_token: Option<&str>,
     max_results: i64,
 ) -> Result<(Vec<TableRow>, Option<String>), UcError> {
-    // not compile-time checked
-    let rows: Vec<TableRow> = if let Some(token) = page_token {
-        sqlx::query_as::<_, TableRow>(
-            "SELECT * FROM uc_tables WHERE schema_id = $1 AND name > $2 ORDER BY name LIMIT $3",
-        )
-        .bind(schema_id)
-        .bind(token)
-        .bind(max_results + 1)
-        .fetch_all(pool)
-        .await
-        .map_err(crate::sqlx_err)?
-    } else {
-        sqlx::query_as::<_, TableRow>(
-            "SELECT * FROM uc_tables WHERE schema_id = $1 ORDER BY name LIMIT $2",
-        )
-        .bind(schema_id)
-        .bind(max_results + 1)
-        .fetch_all(pool)
-        .await
-        .map_err(crate::sqlx_err)?
-    };
-    let next_token = if rows.len() as i64 > max_results {
-        rows.get(max_results as usize - 1).map(|r| r.name.clone())
-    } else {
-        None
-    };
-    Ok((
-        rows.into_iter().take(max_results as usize).collect(),
-        next_token,
-    ))
+    let snap = store.snapshot().await;
+    let found = snap.scan_prefix(
+        EntityKind::Table,
+        &schema_prefix(schema_id),
+        page_token,
+        crate::pagination::over_fetch(max_results),
+    );
+    let rows: Vec<TableRow> = found.into_iter().map(table_of).collect::<Result<_, _>>()?;
+    let (rows, next_token) = crate::pagination::page(rows, max_results, |r| r.name.clone());
+    Ok((rows, next_token))
 }
 
-pub async fn delete(pool: &AnyPool, id: Uuid) -> Result<(), UcError> {
-    let r = sqlx::query("DELETE FROM uc_tables WHERE id = $1")
-        .bind(id)
-        .execute(pool)
+pub async fn delete(store: &Store, id: Uuid) -> Result<(), UcError> {
+    store
+        .commit("DROP TABLE", |snap| {
+            if snap.get(EntityKind::Table, id).is_none() {
+                return Err(UcError::new(
+                    ErrorCode::TableNotFound,
+                    format!("Table '{}' not found", id),
+                ));
+            }
+            // Columns are left behind, matching the SQL: FK enforcement is off
+            // and nothing cascades there either. Callers that want them gone
+            // call delete_columns, as they do today.
+            Ok((
+                vec![Action::Remove {
+                    kind: EntityKind::Table,
+                    id,
+                }],
+                (),
+            ))
+        })
         .await
-        .map_err(crate::sqlx_err)?;
-    if r.rows_affected() == 0 {
-        return Err(UcError::new(
-            ErrorCode::TableNotFound,
-            format!("Table '{}' not found", id),
-        ));
-    }
-    Ok(())
 }
 
 // ── Columns ───────────────────────────────────────────────────────────────
 
-pub async fn insert_columns(pool: &AnyPool, columns: &[ColumnRow]) -> Result<(), UcError> {
-    for col in columns {
-        sqlx::query(
-            "INSERT INTO uc_columns (id, table_id, name, ordinal_position, type_text,
-                  type_json, type_name, type_precision, type_scale, type_interval_type,
-                  nullable, comment, partition_index)
-                 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)",
-        )
-        .bind(col.id)
-        .bind(col.table_id)
-        .bind(&col.name)
-        .bind(col.ordinal_position)
-        .bind(&col.type_text)
-        .bind(&col.type_json)
-        .bind(&col.type_name)
-        .bind(col.type_precision)
-        .bind(col.type_scale)
-        .bind(&col.type_interval_type)
-        .bind(col.nullable)
-        .bind(&col.comment)
-        .bind(col.partition_index)
-        .execute(pool)
+/// One commit for the whole column set rather than the SQL's insert-per-column
+/// loop, so a table never becomes visible with half its schema.
+pub async fn insert_columns(store: &Store, columns: &[ColumnRow]) -> Result<(), UcError> {
+    let columns = columns.to_vec();
+    store
+        .commit("ADD COLUMNS", |_| {
+            let mut actions = Vec::with_capacity(columns.len());
+            for col in &columns {
+                let body = serde_json::to_value(col)
+                    .map_err(|e| UcError::new(ErrorCode::Internal, e.to_string()))?;
+                actions.push(Action::Upsert {
+                    kind: EntityKind::Column,
+                    id: col.id,
+                    body,
+                });
+            }
+            Ok((actions, ()))
+        })
         .await
-        .map_err(crate::sqlx_err)?;
-    }
-    Ok(())
 }
 
-pub async fn get_columns(pool: &AnyPool, table_id: Uuid) -> Result<Vec<ColumnRow>, UcError> {
-    sqlx::query_as::<_, ColumnRow>(
-        "SELECT * FROM uc_columns WHERE table_id = $1 ORDER BY ordinal_position",
-    )
-    .bind(table_id)
-    .fetch_all(pool)
-    .await
-    .map_err(crate::sqlx_err)
+/// `ORDER BY ordinal_position` comes free: the natural key is
+/// (table_id, pad_i64(ordinal_position)), so prefix order is ordinal order.
+pub async fn get_columns(store: &Store, table_id: Uuid) -> Result<Vec<ColumnRow>, UcError> {
+    let snap = store.snapshot().await;
+    snap.ids_under_prefix(EntityKind::Column, &column_prefix(table_id))
+        .into_iter()
+        .filter_map(|id| snap.get(EntityKind::Column, id))
+        .map(column_of)
+        .collect()
 }
 
-pub async fn delete_columns(pool: &AnyPool, table_id: Uuid) -> Result<(), UcError> {
-    sqlx::query("DELETE FROM uc_columns WHERE table_id = $1")
-        .bind(table_id)
-        .execute(pool)
+pub async fn delete_columns(store: &Store, table_id: Uuid) -> Result<(), UcError> {
+    let pfx = column_prefix(table_id);
+    store
+        .commit("DROP COLUMNS", |snap| {
+            let actions: Vec<Action> = snap
+                .ids_under_prefix(EntityKind::Column, &pfx)
+                .into_iter()
+                .map(|id| Action::Remove {
+                    kind: EntityKind::Column,
+                    id,
+                })
+                .collect();
+            Ok((actions, ()))
+        })
         .await
-        .map_err(crate::sqlx_err)?;
-    Ok(())
+}
+
+/// Patch the fields the Delta commit handler updates in place. `None` leaves a
+/// field alone, matching COALESCE.
+#[allow(clippy::too_many_arguments)]
+pub async fn patch(
+    store: &Store,
+    id: Uuid,
+    column_count: Option<i32>,
+    comment: Option<&str>,
+    iceberg_version: Option<i64>,
+    iceberg_timestamp: Option<i64>,
+    updated_at: i64,
+) -> Result<(), UcError> {
+    store
+        .commit("ALTER TABLE", |snap| {
+            // Zero rows matched is success in the SQL; preserved.
+            let Some(current) = snap.get(EntityKind::Table, id) else {
+                return Ok((vec![], ()));
+            };
+            let mut row = table_of(current)?;
+            if let Some(c) = column_count {
+                row.column_count = Some(c);
+            }
+            if let Some(c) = comment {
+                row.comment = Some(c.to_string());
+            }
+            if let Some(v) = iceberg_version {
+                row.uniform_iceberg_converted_delta_version = Some(v);
+            }
+            if let Some(t) = iceberg_timestamp {
+                row.uniform_iceberg_converted_delta_timestamp = Some(t);
+            }
+            row.updated_at = Some(updated_at);
+            let body = serde_json::to_value(&row)
+                .map_err(|e| UcError::new(ErrorCode::Internal, e.to_string()))?;
+            Ok((
+                vec![Action::Upsert {
+                    kind: EntityKind::Table,
+                    id,
+                    body,
+                }],
+                (),
+            ))
+        })
+        .await
+}
+
+/// Rename a table.
+///
+/// The SQL issues a bare UPDATE, so renaming onto an occupied (schema_id, name)
+/// trips the UNIQUE constraint and surfaces as a 500. Returning the domain
+/// error instead is a deliberate change, consistent with the other renames.
+pub async fn rename(
+    store: &Store,
+    id: Uuid,
+    new_name: &str,
+    updated_at: i64,
+) -> Result<(), UcError> {
+    store
+        .commit("RENAME TABLE", |snap| {
+            let Some(current) = snap.get(EntityKind::Table, id) else {
+                return Ok((vec![], ()));
+            };
+            let mut row = table_of(current)?;
+            if new_name != row.name
+                && snap
+                    .get_by_natural_key(EntityKind::Table, &nk(row.schema_id, new_name))
+                    .is_some()
+            {
+                return Err(UcError::new(
+                    ErrorCode::TableAlreadyExists,
+                    format!("Table '{}' already exists", new_name),
+                ));
+            }
+            row.name = new_name.to_string();
+            row.updated_at = Some(updated_at);
+            let body = serde_json::to_value(&row)
+                .map_err(|e| UcError::new(ErrorCode::Internal, e.to_string()))?;
+            Ok((
+                vec![Action::Upsert {
+                    kind: EntityKind::Table,
+                    id,
+                    body,
+                }],
+                (),
+            ))
+        })
+        .await
 }

@@ -1,3 +1,12 @@
+// Tests panic on purpose: unwrap/expect/indexing are the idiom for
+// asserting, and a failed assertion should abort the test.
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::indexing_slicing
+)]
+
 mod common;
 use axum::http::StatusCode;
 use common::*;
@@ -91,12 +100,17 @@ async fn scim2_get_me_no_auth_returns_anonymous() {
     assert!(body["userName"].as_str().is_some());
 }
 
-// ── Auth Tokens ───────────────────────────────────────────────────────────────
+// ── Auth surface ──────────────────────────────────────────────────────────────
+//
+// UC signs no tokens, so it has nothing to exchange for and no key to publish.
+// These assert the endpoints are *gone*: the whole point of the change was to
+// shed auth surface, and a route quietly reappearing would put a signing key
+// back with it.
 
 #[tokio::test]
-async fn auth_token_exchange_returns_jwt() {
+async fn token_exchange_endpoint_no_longer_exists() {
     let (app, _) = build_test_app().await;
-    let (s, body) = post(
+    let (s, _) = post(
         &app,
         &format!("{CTRL}/auth/tokens"),
         json!({
@@ -106,30 +120,18 @@ async fn auth_token_exchange_returns_jwt() {
         }),
     )
     .await;
-    assert_eq!(s, StatusCode::OK);
-    let token = body["access_token"].as_str().unwrap();
-    assert_eq!(token.split('.').count(), 3, "Should be a 3-part JWT");
-    assert_eq!(body["token_type"], "Bearer");
-    assert_eq!(
-        body["issued_token_type"],
-        "urn:ietf:params:oauth:token-type:access_token"
-    );
+    assert_eq!(s, StatusCode::NOT_FOUND);
 }
 
 #[tokio::test]
-async fn auth_token_wrong_grant_type_returns_400() {
+async fn jwks_endpoint_no_longer_exists() {
     let (app, _) = build_test_app().await;
-    let (s, _) = post(
-        &app,
-        &format!("{CTRL}/auth/tokens"),
-        json!({
-            "grant_type": "password",
-            "subject_token": "user@x.com",
-            "subject_token_type": "urn:ietf:params:oauth:token-type:access_token"
-        }),
-    )
-    .await;
-    assert_eq!(s, StatusCode::BAD_REQUEST);
+    let (s, _) = get(&app, "/.well-known/jwks.json").await;
+    assert_eq!(
+        s,
+        StatusCode::NOT_FOUND,
+        "UC holds no signing key, so it publishes no JWKS"
+    );
 }
 
 #[tokio::test]
@@ -137,20 +139,4 @@ async fn auth_logout_returns_200() {
     let (app, _) = build_test_app().await;
     let (s, _) = post(&app, &format!("{CTRL}/auth/logout"), json!({})).await;
     assert_eq!(s, StatusCode::OK);
-}
-
-#[tokio::test]
-async fn jwks_endpoint_returns_valid_json() {
-    let (app, _) = build_test_app().await;
-    let (s, body) = get(&app, "/.well-known/jwks.json").await;
-    assert_eq!(s, StatusCode::OK);
-    assert!(body["keys"].is_array());
-    let keys = body["keys"].as_array().unwrap();
-    assert!(!keys.is_empty());
-    assert_eq!(keys[0]["kty"], "RSA");
-    assert!(keys[0]["kid"].as_str().is_some());
-    // n and e must be base64url, not raw DER
-    let n = keys[0]["n"].as_str().unwrap();
-    assert!(!n.contains('+'), "n should be base64url (no +)");
-    assert!(!n.contains('/'), "n should be base64url (no /)");
 }

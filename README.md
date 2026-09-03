@@ -11,14 +11,11 @@ unitycatalog-rs/
 │   ├── uc-errors/       ErrorCode enum, UcError, UC/Delta wire error shapes
 │   ├── uc-types/        Privilege, UriScheme, TokenType, SecurableType
 │   ├── uc-openapi/      Serde types from all.yaml + control.yaml + delta.yaml
-│   ├── uc-db/           sqlx row structs + repositories (SQLite / Postgres)
+│   ├── uc-db/           row structs, repositories, log-structured store
 │   ├── uc-auth/         JWT (RS512) + Casbin RBAC
 │   ├── uc-credentials/  AWS/Azure/GCP credential vending
 │   ├── uc-api/          Axum routers — catalog, control, delta APIs
 │   └── uc-server/       Binary: startup wiring, CLI args, serve
-├── migrations/
-│   ├── sqlite/          DDL for SQLite (default)
-│   └── postgres/        DDL for PostgreSQL
 ├── tests/python/        Pytest integration tests
 ├── scripts/
 │   └── seed.py          Seeds sample data (unity catalog + default schema)
@@ -29,7 +26,7 @@ unitycatalog-rs/
 | Concern | Crate |
 |---|---|
 | HTTP server | `axum 0.7` + `tower-http` |
-| Database | `sqlx 0.7` (SQLite default, Postgres via feature flag) |
+| Storage | log-structured object store (S3 / MinIO), materialised in memory |
 | Auth | `jsonwebtoken 9` (RS512 JWT) + `casbin` (RBAC) |
 | Serialization | `serde` + `serde_json` |
 | Cloud credentials | `aws-sdk-sts` (always compiled in; vending toggled at runtime via `--enable-aws-credentials`, default on) |
@@ -42,23 +39,32 @@ unitycatalog-rs/
 cargo build
 ```
 
-For Postgres instead of SQLite:
-
-```bash
-cargo build --no-default-features --features postgres
-```
+There is one backend and no feature flags to choose it.
 
 ### 2. Run the server
 
+Key material comes from a secret store, so generate some once:
+
 ```bash
+./target/debug/uc-server --generate-key-file ./etc/conf/keys.json
+```
+
+Then point it at an object store (`AWS_ENDPOINT_URL` redirects to MinIO):
+
+```bash
+AWS_ENDPOINT_URL=http://localhost:9000 \
 ./target/debug/uc-server \
   --port 8080 \
-  --config-dir ./etc/conf \
-  --database-url "sqlite:./etc/db/uc.db?mode=rwc" \
+  --storage-root s3://my-bucket/my-org \
+  --key-file ./etc/conf/keys.json \
   --no-auth
 ```
 
-RSA keys are generated automatically on first start under `--config-dir`.
+Key material is never written to the object store, and there is no option to do
+so. Credentials vended by this server are bucket-scoped, so a private key in
+that bucket would be readable by anything holding one. A missing key file is a
+startup error, never a cue to generate: silently minting a new keypair
+invalidates every token already issued.
 
 ### 3. Seed sample data
 
@@ -121,31 +127,89 @@ Iceberg REST catalog (`/api/2.1/unity-catalog/iceberg/*`).
 
 RBAC uses [Casbin](https://casbin.org/) with a hierarchical model: Metastore → Catalog → Schema → Table/Volume/Function/Model.
 
-## Database
+## Storage
 
-SQLite is the default (zero setup). Switch to Postgres at compile time:
+Metadata is an append-only JSONL commit log with periodic checkpoints, laid out
+like Delta's `_delta_log`, materialised in memory at startup. There is no
+database, no driver, no migrations and no local state.
+
+Concurrency rests on conditional writes (`If-None-Match: *`), so it needs S3
+(August 2024 or later) or MinIO. Delta commits are partitioned into a log per
+table, matching Delta's own layout.
+
+Multiple replicas may share one log. Writes are safe — a stale replica loses the
+conditional write, replays and retries — but reads are only eventually
+consistent, bounded by `--refresh-interval-secs`.
+
+See [docs/log-structured-metadata.md](docs/log-structured-metadata.md) for the
+design and its limits.
+
+## Observability
+
+Traces are exported over OTLP when `OTEL_EXPORTER_OTLP_ENDPOINT` is set, and the
+whole stack is inert otherwise — no exporter, no batch processor, no span layer.
+Configured through the standard `OTEL_*` variables rather than bespoke flags.
 
 ```bash
-cargo build --no-default-features --features postgres
+OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4317 \
+OTEL_SERVICE_NAME=uc-server \
+./target/release/uc-server --storage-root s3://bucket/org --oidc-issuer https://...
 ```
 
-Migrations run automatically on startup from `migrations/sqlite/` or `migrations/postgres/`.
+All three signals go over the same OTLP pipeline.
+
+**Traces.** `http.request` wraps each request, with `store.commit` (carrying
+`uc.operation`, the version that landed, and how many attempts contention cost),
+`store.catch_up`, and the individual `s3.*` object operations nested beneath it.
+Enough to see whether a slow request was spent in the object store or waiting on
+a conditional-write retry.
+
+**Logs.** Exported over OTLP rather than scraped from stdout, so each record
+carries the trace and span id of the request that produced it — a log you cannot
+pivot to its trace is not much better than a log on its own. stdout keeps its
+human-readable output for when the collector itself is the problem.
+
+**Metrics.** Deliberately only resident state:
+
+| Metric | Why |
+|---|---|
+| `uc.store.entities` (by `uc.kind`) | The whole catalog is in memory, so entity count decides whether the process fits its limit |
+| `uc.store.version` | Replay position of the in-memory snapshot |
+
+Everything event-shaped — request rate, latency, commit contention — is already
+on the spans, and the collector's spanmetrics connector derives RED metrics from
+those. Emitting both would be double instrumentation that can disagree with
+itself.
+
+`SIGTERM` drains in-flight requests, then flushes all three signals before exit.
 
 ## CLI Options
 
 ```
---port          Port to listen on (default: 8080)
---config-dir    Path to config directory — RSA keys, JWKS, token (default: ./etc/conf)
---database-url  SQLite or Postgres connection string
---no-auth       Disable JWT/RBAC enforcement
+--port                    Port to listen on (default: 8080)
+--storage-root            Object-store root, as s3://bucket/prefix
+--key-file PATH           JWT signing key material, the path a mounted secret
+                          arrives at. Required. A missing file is an error,
+                          never a cue to generate.
+--generate-key-file PATH  Write fresh key material to PATH and exit, for loading
+                          into a secret store. Refuses to overwrite an existing
+                          file.
+--config-dir              Config directory — holds the dev admin token
+                          (default: ./etc/conf)
+--refresh-interval-secs   Refresh the in-memory snapshot from the log every N
+                          seconds (default 0, off). Only useful with more than
+                          one replica on the same log.
+--no-auth                 Disable JWT/RBAC enforcement
 ```
 
 ## Development
 
 ```bash
-cargo check          # fast type check
-cargo test --lib     # unit tests across the workspace (JWT, serde, error mapping, ...)
-cargo build          # full build
+cargo check                                  # fast type check
+cargo test --lib                             # unit tests across the workspace
+cargo build                                  # full build
+
+cargo test -p uc-db --test test_repos          # repo layer, end to end
 ```
 
 ## License

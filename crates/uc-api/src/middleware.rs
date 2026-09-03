@@ -4,18 +4,17 @@ use axum::{
     response::Response,
 };
 use std::sync::Arc;
-use uc_auth::{decode_oidc_sub, jwt::decode_token, UcClaims};
+use uc_auth::{decode_oidc_sub, UcClaims};
 use uc_db::repos::user;
+use uc_db::store::actor::{self as actor_scope, Actor};
 use uc_errors::{error_into_response, ErrorFormat, UcError};
 use uc_types::TokenType;
 
 use crate::state::AppState;
 
-/// Paths that bypass JWT authentication.
-const AUTH_BYPASS_PATHS: &[&str] = &[
-    "/api/1.0/unity-control/auth/tokens",
-    "/.well-known/jwks.json",
-];
+/// Paths that bypass JWT authentication. Empty since UC stopped issuing tokens:
+/// the exchange and JWKS endpoints it used to exempt no longer exist.
+const AUTH_BYPASS_PATHS: &[&str] = &[];
 
 /// JWT auth middleware: extracts Bearer token, validates it, checks user state,
 /// and inserts Arc<UcClaims> into request extensions.
@@ -38,7 +37,7 @@ pub async fn auth_middleware(
             iss: "internal".to_string(),
             iat: 0,
             jti: "disabled".to_string(),
-            token_type: uc_types::TokenType::Service,
+            token_type: TokenType::Service,
         });
         req.extensions_mut().insert(dummy);
         return next.run(req).await;
@@ -55,38 +54,45 @@ pub async fn auth_middleware(
         }
     };
 
-    // Decode and validate JWT — try UC-issued first, then OIDC issuer if configured
-    let claims = match decode_token(&state.jwt_config, &token) {
-        Ok(td) => td.claims,
-        Err(uc_err) => {
-            // OIDC-validated tokens map to a per-caller principal so distinct
-            // identities (e.g. each K8s ServiceAccount) aren't collapsed into a
-            // single shared admin principal. Each external `sub` resolves to its
-            // own (lazily-created, zero-grant) uc_users row.
-            if let Some(oidc) = &state.oidc_config {
-                match decode_oidc_sub(oidc, &token) {
-                    Ok(sub) => match user::find_or_create_by_external_id(&state.pool, &sub).await {
-                        Ok(row) => UcClaims {
-                            sub: row
-                                .email
-                                .unwrap_or_else(|| row.external_id.clone().unwrap_or(sub)),
-                            iss: oidc.issuer.clone(),
-                            iat: chrono::Utc::now().timestamp(),
-                            jti: uuid::Uuid::now_v7().to_string(),
-                            token_type: TokenType::Service,
-                        },
-                        Err(e) => return error_into_response(e, ErrorFormat::Catalog),
+    // Validate against the configured OIDC issuer. UC signs no tokens of its
+    // own: it is a resource server, so the only trust root is the issuer's
+    // JWKS. `oidc_config` is Some whenever auth is enabled -- the two are set
+    // from the same flag, so there is no state where auth is on with no way to
+    // authenticate.
+    let Some(oidc) = &state.oidc_config else {
+        let err = UcError::unauthenticated("No OIDC issuer configured");
+        return error_into_response(err, ErrorFormat::Catalog);
+    };
+
+    // Each external `sub` resolves to its own lazily-created, zero-grant
+    // uc_users row, so distinct identities (one per K8s ServiceAccount, say)
+    // are not collapsed into a single shared principal.
+    let (claims, actor) = match decode_oidc_sub(oidc, &token) {
+        Ok(sub) => match user::find_or_create_by_external_id(&state.pool, &sub).await {
+            Ok(row) => {
+                let name = row
+                    .email
+                    .clone()
+                    .unwrap_or_else(|| row.external_id.clone().unwrap_or_else(|| sub.clone()));
+                let actor = Actor::new(Some(row.id), name.clone());
+                (
+                    UcClaims {
+                        sub: name,
+                        iss: oidc.issuer.clone(),
+                        iat: chrono::Utc::now().timestamp(),
+                        jti: uuid::Uuid::now_v7().to_string(),
+                        token_type: TokenType::Service,
                     },
-                    Err(_) => return error_into_response(uc_err, ErrorFormat::Catalog),
-                }
-            } else {
-                return error_into_response(uc_err, ErrorFormat::Catalog);
+                    actor,
+                )
             }
-        }
+            Err(e) => return error_into_response(e, ErrorFormat::Catalog),
+        },
+        Err(e) => return error_into_response(e, ErrorFormat::Catalog),
     };
 
     // SERVICE tokens bypass user DB lookup — they represent the server itself
-    if claims.token_type != uc_types::TokenType::Service {
+    if claims.token_type != TokenType::Service {
         match user::get_by_email(&state.pool, &claims.sub).await {
             Ok(Some(user)) if user.is_enabled() => {}
             Ok(Some(_)) => {
@@ -102,7 +108,10 @@ pub async fn auth_middleware(
     }
 
     req.extensions_mut().insert(Arc::new(claims));
-    next.run(req).await
+    // Every commit made while handling this request records who made it. This
+    // is what gives deletes and grants an actor: they have no *_by column to
+    // carry one, so the commit itself has to.
+    actor_scope::scope(Some(actor), next.run(req)).await
 }
 
 fn extract_token(req: &Request) -> Option<String> {

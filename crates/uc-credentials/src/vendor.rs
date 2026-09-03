@@ -58,7 +58,7 @@ impl CloudCredentialVendor {
         // Check cache first
         let cache_key = make_cache_key(ctx);
         {
-            let cache = self.cache.lock().unwrap();
+            let cache = self.cache.lock().unwrap_or_else(|e| e.into_inner());
             if let Some(entry) = cache.get(&cache_key) {
                 if entry.expires_at > Instant::now() {
                     return Ok(entry.creds.clone());
@@ -73,7 +73,7 @@ impl CloudCredentialVendor {
         // Default to 55-minute TTL (STS default session is 1h, buffer 5m)
         let ttl = parse_expiry_ttl(&creds).unwrap_or(Duration::from_secs(55 * 60));
         {
-            let mut cache = self.cache.lock().unwrap();
+            let mut cache = self.cache.lock().unwrap_or_else(|e| e.into_inner());
             cache.insert(
                 cache_key,
                 CachedCredential {
@@ -133,11 +133,18 @@ fn parse_expiry_ttl(creds: &TemporaryCredentials) -> Option<Duration> {
     let exp = chrono::DateTime::parse_from_rfc3339(exp_str).ok()?;
     let now = chrono::Utc::now();
     let secs_until_exp = (exp.with_timezone(&chrono::Utc) - now).num_seconds();
-    if secs_until_exp <= CACHE_EXPIRY_BUFFER_SECS as i64 {
+    // Compare unsigned-to-unsigned: a negative remaining lifetime (already
+    // expired, or a clock skewed backwards) must not wrap into a huge cache TTL
+    // for a credential that is no longer valid.
+    let remaining = match u64::try_from(secs_until_exp) {
+        Ok(secs) => secs,
+        Err(_) => return None, // expired
+    };
+    if remaining <= CACHE_EXPIRY_BUFFER_SECS {
         return None; // already near expiry, don't cache
     }
     Some(Duration::from_secs(
-        (secs_until_exp as u64).saturating_sub(CACHE_EXPIRY_BUFFER_SECS),
+        remaining.saturating_sub(CACHE_EXPIRY_BUFFER_SECS),
     ))
 }
 
@@ -282,7 +289,7 @@ async fn presign_s3_url(
     }
     let s3_client = aws_sdk_s3::Client::from_conf(s3_config_builder.build());
 
-    let expiry = std::time::Duration::from_secs(presign_expiry_secs());
+    let expiry = Duration::from_secs(presign_expiry_secs());
     let presign_config = aws_sdk_s3::presigning::PresigningConfig::expires_in(expiry).ok()?;
 
     if is_write_operation(&ctx.operation) {
@@ -308,6 +315,13 @@ async fn presign_s3_url(
 
 #[cfg(test)]
 mod tests {
+    // Tests panic on purpose; see the note in the crate-level modules.
+    #![allow(
+        clippy::unwrap_used,
+        clippy::expect_used,
+        clippy::panic,
+        clippy::indexing_slicing
+    )]
     use super::*;
     use crate::context::{CredentialContext, CredentialOperation};
     use uc_types::UriScheme;

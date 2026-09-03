@@ -1,18 +1,14 @@
 use anyhow::Context;
 use axum::Router;
 use clap::Parser;
-use std::{
-    net::SocketAddr,
-    path::{Path, PathBuf},
-    sync::Arc,
-};
+use std::{net::SocketAddr, path::PathBuf, sync::Arc};
+mod telemetry;
+
 use tracing::info;
-use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 use uc_api::{catalog_api, control_api, delta_api, middleware::auth_middleware, state::AppState};
-use uc_auth::{AllowingAuthorizer, JwkSet, JwtConfig, KeyManager, OidcConfig, UcAuthorizer};
+use uc_auth::{AllowingAuthorizer, JwkSet, OidcConfig, UcAuthorizer};
 use uc_credentials::CloudCredentialVendor;
 use uc_db::{
-    pool::run_migrations,
     repos::{metastore, user},
     AnyPool,
 };
@@ -29,16 +25,35 @@ struct Args {
     #[arg(long, default_value = "./etc/conf")]
     config_dir: PathBuf,
 
-    #[arg(long, default_value = "sqlite:./etc/db/uc.db?mode=rwc")]
-    database_url: String,
+    /// Seconds between background refreshes of the in-memory snapshot from the
+    /// log. 0 disables it.
+    ///
+    /// Only matters with more than one uc-server on the same log. A replica
+    /// learns about another's commits when it next writes (the conditional PUT
+    /// forces a replay on conflict), but a read-only replica would otherwise
+    /// serve stale metadata indefinitely. This bounds that staleness at the
+    /// cost of one LIST per interval.
+    ///
+    /// It does not make reads linearizable — a request can still land in the
+    /// window between another replica's commit and the next refresh. It turns
+    /// unbounded staleness into bounded staleness, which is a different and
+    /// weaker claim.
+    #[arg(long, default_value_t = 0)]
+    refresh_interval_secs: u64,
 
-    /// Disable authorization (allow all requests). Use only in dev/testing.
-    #[arg(long, default_value_t = false)]
-    no_auth: bool,
+    /// Object-store root for the log-structured metadata store, as
+    /// `s3://bucket/prefix`. There is no database, no migrations and no volume
+    /// to lose.
+    #[arg(long, default_value = "")]
+    storage_root: String,
 
-    /// OIDC issuer URL. When set, Bearer tokens issued by this issuer are
-    /// accepted via JWKS validation (fetched from {issuer}/.well-known/...).
-    /// Intended for in-cluster K8s SA projected tokens.
+    /// OIDC issuer URL. Bearer tokens from this issuer are accepted, validated
+    /// against its JWKS.
+    ///
+    /// This single flag decides authentication: set, and auth and RBAC are
+    /// enforced; unset, and every request is allowed. They were two flags, and
+    /// "auth enabled with no issuer" was a startup that accepted nothing --
+    /// UC signs no tokens of its own, so the issuer is the only trust root.
     #[arg(long)]
     oidc_issuer: Option<String>,
 
@@ -46,9 +61,11 @@ struct Args {
     /// credentials (temporary-table/path-credentials APIs), instead of
     /// returning Unimplemented for the S3 scheme. Requires UC-server's own
     /// AWS identity to have sts:AssumeRole permission on each
-    /// StorageCredential's role_arn. On by default -- every deployment in
-    /// this project uses MinIO/S3-compatible storage, so this is the normal
-    /// path, not an opt-in; pass --enable-aws-credentials=false to disable.
+    /// StorageCredential's role_arn.
+    ///
+    /// On by default: S3-scheme credentials are the common case, so vending is
+    /// the normal path rather than an opt-in. Pass
+    /// --enable-aws-credentials=false to disable.
     #[arg(long, default_value_t = true)]
     enable_aws_credentials: bool,
 
@@ -131,47 +148,31 @@ async fn bootstrap_operator_principal(
 async fn main() -> anyhow::Result<()> {
     let args = Args::parse();
 
-    tracing_subscriber::registry()
-        .with(
-            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| {
-                format!("uc_server={l},uc_api={l},uc_db={l}", l = args.log_level).into()
-            }),
-        )
-        .with(tracing_subscriber::fmt::layer().with_ansi(false))
-        .init();
+    let telemetry = telemetry::init(&args.log_level)?;
 
     info!("Starting Unity Catalog server on port {}", args.port);
     info!("Config dir: {}", args.config_dir.display());
-    info!("Database:   {}", mask_db_url(&args.database_url));
+    info!("Metadata:   {}", args.storage_root);
     info!(
         "Auth:       {}",
-        if args.no_auth { "disabled" } else { "enabled" }
+        if args.oidc_issuer.is_some() {
+            "enabled"
+        } else {
+            "disabled"
+        }
     );
 
-    // ── 1. RSA key initialization ─────────────────────────────────────────────
-    let key_manager =
-        KeyManager::load_or_generate(&args.config_dir).context("Failed to initialize RSA keys")?;
-    let jwt_config = JwtConfig::from_der(
-        &key_manager.private_key_der,
-        &key_manager.public_key_der,
-        key_manager.key_id.clone(),
-    )
-    .context("Failed to create JWT config")?;
-
-    // ── 2. Database pool + migrations ─────────────────────────────────────────
-    let (actual_db_url, s3_info) = prepare_database_url(&args.config_dir, &args.database_url)
-        .await
-        .context("Failed to prepare database URL")?;
-
-    let pool = uc_db::pool::connect(&actual_db_url)
-        .await
-        .context("Failed to connect to database")?;
-
-    run_migrations(&pool)
-        .await
-        .context("Failed to run database migrations")?;
-
-    info!("Database migrations applied");
+    // ── 1. Store ──────────────────────────────────────────────────────────────
+    let pool = {
+        let pool = open_log_store(&args.storage_root)
+            .await
+            .context("Failed to open the metadata log")?;
+        info!(
+            "Log store replayed to version {}",
+            pool.snapshot().await.version
+        );
+        pool
+    };
 
     // ── 3. Metastore initialization ───────────────────────────────────────────
     let metastore = metastore::get_or_init(&pool, "unity-catalog")
@@ -181,7 +182,7 @@ async fn main() -> anyhow::Result<()> {
     info!("Metastore ID: {}", metastore_id);
 
     // ── 4. Authorization ──────────────────────────────────────────────────────
-    let authorizer: Arc<dyn uc_auth::Authorizer> = if args.no_auth {
+    let authorizer: Arc<dyn uc_auth::Authorizer> = if args.oidc_issuer.is_none() {
         info!("Authorization disabled — all requests allowed");
         Arc::new(AllowingAuthorizer)
     } else {
@@ -194,7 +195,7 @@ async fn main() -> anyhow::Result<()> {
 
     // ── 5. Admin user initialization ──────────────────────────────────────────
     let admin_email = "admin@unitycatalog.io";
-    if !args.no_auth && user::get_by_email(&pool, admin_email).await?.is_none() {
+    if args.oidc_issuer.is_some() && user::get_by_email(&pool, admin_email).await?.is_none() {
         // UUIDv7: time-ordered — encodes when this admin user was created
         let admin_id = Uuid::now_v7();
         let now = chrono::Utc::now().timestamp_millis();
@@ -217,7 +218,7 @@ async fn main() -> anyhow::Result<()> {
     }
 
     // ── 5b. Operator bootstrap principal (Tier 2 auto-provisioning) ───────────
-    if !args.no_auth {
+    if args.oidc_issuer.is_some() {
         bootstrap_operator_principal(
             &pool,
             authorizer.as_ref(),
@@ -228,15 +229,8 @@ async fn main() -> anyhow::Result<()> {
         .context("Failed to bootstrap operator principal")?;
     }
 
-    // ── 6. Admin token (write to config_dir for local dev convenience) ────────
-    let token_claims = uc_auth::jwt::UcClaims::new_access(admin_email);
-    let token = uc_auth::jwt::encode_token(&jwt_config, &token_claims)
-        .context("Failed to create admin token")?;
-    std::fs::write(args.config_dir.join("token.txt"), &token)
-        .context("Failed to write token.txt")?;
-
     // ── 7. OIDC setup (optional; skipped when --no-auth) ─────────────────────
-    let oidc_config = if !args.no_auth {
+    let oidc_config = {
         if let Some(ref issuer) = args.oidc_issuer {
             let jwks = fetch_oidc_jwks(issuer)
                 .await
@@ -249,18 +243,36 @@ async fn main() -> anyhow::Result<()> {
         } else {
             None
         }
-    } else {
-        None
     };
+
+    telemetry::register_store_metrics(pool.clone());
+
+    // ── 8b. Snapshot refresh ──────────────────────────────────────────────────
+    if args.refresh_interval_secs > 0 {
+        let refresher = pool.clone();
+        let period = std::time::Duration::from_secs(args.refresh_interval_secs);
+        info!("Refreshing snapshot every {}s", args.refresh_interval_secs);
+        tokio::spawn(async move {
+            let mut ticker = tokio::time::interval(period);
+            ticker.tick().await; // the first tick fires immediately
+            loop {
+                ticker.tick().await;
+                // A failed refresh is not fatal: the snapshot simply stays
+                // where it was, and a write will force a replay anyway.
+                if let Err(e) = refresher.catch_up().await {
+                    tracing::warn!(error = %e, "snapshot refresh failed");
+                }
+            }
+        });
+    }
 
     // ── 8. App state ──────────────────────────────────────────────────────────
     let state = AppState::new(
         pool,
         authorizer,
         build_credential_vendor(args.enable_aws_credentials),
-        jwt_config,
         metastore_id,
-        !args.no_auth,
+        args.oidc_issuer.is_some(),
         args.config_dir.clone(),
         oidc_config,
     );
@@ -278,6 +290,25 @@ async fn main() -> anyhow::Result<()> {
             state.clone(),
             auth_middleware,
         ))
+        // Outermost, so every request gets a span that the store and S3 spans
+        // hang off. Without a parent span the store timings arrive orphaned and
+        // cannot be attributed to a request.
+        .layer(
+            tower_http::trace::TraceLayer::new_for_http()
+                .make_span_with(|req: &axum::http::Request<_>| {
+                    tracing::info_span!(
+                        "http.request",
+                        http.method = %req.method(),
+                        http.route = %req.uri().path(),
+                    )
+                })
+                // Emitted inside the span above, so the log record carries the
+                // trace and span ids. Without this there was no per-request
+                // logging at all, and nothing to pivot from a trace to a log.
+                .on_response(
+                    tower_http::trace::DefaultOnResponse::new().level(tracing::Level::INFO),
+                ),
+        )
         // Registered after the auth layer so it is *not* wrapped by it: an
         // unauthenticated liveness/readiness endpoint that validates the HTTP
         // stack is up (unlike a tcpSocket probe). Returns 200 OK, no auth.
@@ -291,169 +322,90 @@ async fn main() -> anyhow::Result<()> {
         .await
         .context("Failed to bind to port")?;
 
-    let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
-    if let Some(ref s3_info) = s3_info {
-        let s3_client = build_s3_client().ok();
-        let bucket = s3_info.bucket.clone();
-        let key = s3_info.key.clone();
-        let local_path = s3_info.local_path.clone();
-        tokio::spawn(async move {
-            let _ = shutdown_rx.await;
-            if let Some(client) = s3_client {
-                let endpoint = std::env::var("AWS_ENDPOINT_URL").unwrap_or_default();
-                let url = if endpoint.is_empty() {
-                    format!("https://{bucket}.s3.amazonaws.com/{key}")
-                } else {
-                    format!("{endpoint}/{bucket}/{key}")
-                };
-                if let Ok(data) = tokio::fs::read(&local_path).await {
-                    let _ = client.put(&url).body(data).send().await;
-                    info!("Uploaded metadata DB to s3://{bucket}/{key}");
-                }
+    // No metadata needs flushing at exit: a commit is durable in the object
+    // store before the handler that made it returns, so nothing acknowledged
+    // can be lost. What draining buys is that in-flight requests get their
+    // response instead of a connection reset -- on a rolling deploy that is the
+    // difference between clean 200s and a burst of client errors, including for
+    // writes that actually succeeded.
+    axum::serve(listener, app)
+        .with_graceful_shutdown(shutdown_signal())
+        .await
+        .context("Server error")?;
+
+    // Export whatever spans the batch processor still holds. These are the last
+    // seconds before exit -- the ones describing why the process is going away.
+    telemetry.shutdown();
+    Ok(())
+}
+
+/// Resolves on SIGTERM (what a kubelet sends) or Ctrl-C.
+async fn shutdown_signal() {
+    let ctrl_c = async {
+        let _ = tokio::signal::ctrl_c().await;
+    };
+
+    #[cfg(unix)]
+    let terminate = async {
+        match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
+            Ok(mut sig) => {
+                sig.recv().await;
             }
-        });
-    }
-
-    axum::serve(listener, app).await.context("Server error")?;
-
-    let _ = shutdown_tx.send(());
-    Ok(())
-}
-
-// ── S3-backed SQLite support ────────────────────────────────────────────────────
-
-#[allow(dead_code)]
-struct S3Info {
-    bucket: String,
-    pub key: String,
-    pub local_path: PathBuf,
-}
-
-async fn prepare_database_url(
-    config_dir: &Path,
-    url: &str,
-) -> anyhow::Result<(String, Option<S3Info>)> {
-    let Some(stripped) = url.strip_prefix("s3://") else {
-        tokio::fs::create_dir_all("./etc/db").await.ok();
-        return Ok((url.to_string(), None));
-    };
-
-    let (bucket, key) = match stripped.split_once('/') {
-        Some((b, k)) => (b.to_string(), k.to_string()),
-        None => anyhow::bail!("Invalid s3:// URL: expected s3://bucket/key, got {url}"),
-    };
-
-    let s3_client = build_s3_client()?;
-    let local_dir = config_dir.join("db");
-    tokio::fs::create_dir_all(&local_dir).await?;
-    let local_path = local_dir.join(format!("uc-{}.db", sanitize_filename(&key)));
-
-    download_from_s3(&s3_client, &bucket, &key, &local_path).await?;
-    info!("Downloaded metadata DB from s3://{bucket}/{key}");
-
-    let sqlite_url = format!("sqlite:{}?mode=rwc", local_path.display());
-    Ok((
-        sqlite_url,
-        Some(S3Info {
-            bucket,
-            key,
-            local_path,
-        }),
-    ))
-}
-
-fn build_s3_client() -> anyhow::Result<reqwest::Client> {
-    let endpoint = std::env::var("AWS_ENDPOINT_URL").unwrap_or_default();
-    let key_id = std::env::var("AWS_ACCESS_KEY_ID").unwrap_or_default();
-    let secret = std::env::var("AWS_SECRET_ACCESS_KEY").unwrap_or_default();
-
-    let mut builder = reqwest::Client::builder();
-    if !endpoint.is_empty() {
-        let auth = format!("{}:{}", key_id, secret);
-        let encoded = base64_encode(&auth);
-        let header_value = format!("Basic {encoded}");
-        let mut headers = reqwest::header::HeaderMap::new();
-        if let Ok(hv) = reqwest::header::HeaderValue::from_str(&header_value) {
-            headers.insert(reqwest::header::AUTHORIZATION, hv);
+            // Without a handler the default disposition kills the process, so
+            // failing to install one must not leave this future pending
+            // forever -- that would hang shutdown entirely.
+            Err(e) => {
+                tracing::error!(error = %e, "cannot listen for SIGTERM; shutdown will be abrupt");
+                std::future::pending::<()>().await;
+            }
         }
-        builder = builder.default_headers(headers);
+    };
+    #[cfg(not(unix))]
+    let terminate = std::future::pending::<()>();
+
+    tokio::select! {
+        () = ctrl_c => info!("interrupt received, draining"),
+        () = terminate => info!("SIGTERM received, draining"),
     }
-    Ok(builder.build()?)
 }
 
-async fn download_from_s3(
-    client: &reqwest::Client,
-    bucket: &str,
-    key: &str,
-    local_path: &std::path::Path,
-) -> anyhow::Result<()> {
-    if local_path.exists() {
-        return Ok(());
-    }
-    let endpoint = std::env::var("AWS_ENDPOINT_URL").unwrap_or_default();
-    let url = if endpoint.is_empty() {
-        format!("https://{bucket}.s3.amazonaws.com/{key}")
-    } else {
-        format!("{endpoint}/{bucket}/{key}")
-    };
-    let resp = client.get(&url).send().await?;
-    if resp.status().is_success() {
-        let bytes = resp.bytes().await?;
-        tokio::fs::write(local_path, &bytes).await?;
-    }
-    Ok(())
-}
+// ── Log-structured store ────────────────────────────────────────────────────────
 
-fn sanitize_filename(key: &str) -> String {
-    key.replace('/', "_")
-}
+/// Open the metadata log at `s3://bucket/prefix`.
+///
+/// `AWS_ENDPOINT_URL` points at an S3-compatible store other than AWS, and
+/// forces path-style addressing with it: virtual-host style turns the bucket
+/// into a hostname prefix, which will not resolve for most self-hosted
+/// endpoints.
+async fn open_log_store(storage_root: &str) -> anyhow::Result<AnyPool> {
+    use std::sync::Arc;
 
-/// Redact the `user:password@` credentials from a database URL before logging.
-/// SQLite URLs have no credentials and pass through unchanged; Postgres/S3
-/// URLs of the form `scheme://user:pass@host/...` have the password masked.
-fn mask_db_url(url: &str) -> String {
-    let Some((scheme, rest)) = url.split_once("://") else {
-        return url.to_string();
+    let rest = storage_root.strip_prefix("s3://").ok_or_else(|| {
+        anyhow::anyhow!("--storage-root must be s3://bucket[/prefix], got {storage_root:?}")
+    })?;
+    let (bucket, prefix) = match rest.split_once('/') {
+        Some((b, p)) => (b, p),
+        None => (rest, ""),
     };
-    // Only the authority (up to the first '/') can carry credentials.
-    let (authority, path) = match rest.split_once('/') {
-        Some((a, p)) => (a, Some(p)),
-        None => (rest, None),
-    };
-    let masked_authority = match authority.split_once('@') {
-        Some((creds, host)) => {
-            let user = creds.split_once(':').map(|(u, _)| u).unwrap_or(creds);
-            format!("{user}:****@{host}")
+    if bucket.is_empty() {
+        anyhow::bail!("--storage-root has no bucket: {storage_root:?}");
+    }
+
+    let sdk = aws_config::load_defaults(aws_config::BehaviorVersion::latest()).await;
+    let mut builder = aws_sdk_s3::config::Builder::from(&sdk);
+    if let Ok(endpoint) = std::env::var("AWS_ENDPOINT_URL") {
+        if !endpoint.is_empty() {
+            builder = builder.endpoint_url(endpoint).force_path_style(true);
         }
-        None => authority.to_string(),
-    };
-    match path {
-        Some(p) => format!("{scheme}://{masked_authority}/{p}"),
-        None => format!("{scheme}://{masked_authority}"),
     }
-}
+    let client = aws_sdk_s3::Client::from_conf(builder.build());
 
-fn base64_encode(input: &str) -> String {
-    let mut buf = Vec::new();
-    for chunk in input.as_bytes().chunks(3) {
-        let b0 = chunk[0];
-        let b1 = if chunk.len() > 1 { chunk[1] } else { 0 };
-        let b2 = if chunk.len() > 2 { chunk[2] } else { 0 };
-        let n = (b0 as u32) << 16 | (b1 as u32) << 8 | (b2 as u32);
-        buf.push(ENC_TABLE[((n >> 18) & 63) as usize]);
-        buf.push(ENC_TABLE[((n >> 12) & 63) as usize]);
-        buf.push(ENC_TABLE[((n >> 6) & 63) as usize]);
-        buf.push(ENC_TABLE[(n & 63) as usize]);
-    }
-    let padding = (3 - input.len() % 3) % 3;
-    for _ in 0..padding {
-        buf.pop();
-        buf.push(b'=');
-    }
-    String::from_utf8(buf).unwrap()
+    info!("Metadata log: s3://{bucket}/{prefix}");
+    let log = Arc::new(uc_db::store::s3::S3Log::new(client, bucket, prefix));
+    uc_db::store::Store::open(log)
+        .await
+        .map_err(|e| anyhow::anyhow!("{e}"))
 }
-
-const ENC_TABLE: [u8; 64] = *b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 
 // ── OIDC JWKS discovery ───────────────────────────────────────────────────────
 
@@ -489,8 +441,11 @@ async fn fetch_oidc_jwks(issuer: &str) -> anyhow::Result<JwkSet> {
         .await
         .context("OIDC discovery response not valid JSON")?;
 
-    let jwks_uri = discovery["jwks_uri"]
-        .as_str()
+    // The response is whatever the issuer returned; `.get` rather than `[]` so a
+    // non-object body is an error instead of a panic.
+    let jwks_uri = discovery
+        .get("jwks_uri")
+        .and_then(serde_json::Value::as_str)
         .ok_or_else(|| anyhow::anyhow!("OIDC discovery response missing 'jwks_uri'"))?;
 
     let mut jwks_req = client.get(jwks_uri);

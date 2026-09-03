@@ -1,3 +1,6 @@
+// Shared test harness. Items are `pub` so each test binary can use them, but
+// within this compilation unit rustc sees no reachable path to them.
+#![allow(unreachable_pub)]
 // Each integration test file is compiled as its own binary and pulls in this
 // module separately, so helpers unused by one binary but used by another
 // trip dead_code false positives.
@@ -17,34 +20,29 @@ use serde_json::Value;
 use std::sync::Arc;
 use tower::ServiceExt;
 use uc_api::{catalog_api, control_api, delta_api, middleware::auth_middleware, state::AppState};
-use uc_auth::{AllowingAuthorizer, JwtConfig, KeyManager, OidcConfig};
+use uc_auth::{AllowingAuthorizer, OidcConfig};
 use uc_credentials::CloudCredentialVendor;
-use uc_db::{pool::run_migrations, AnyPool};
+use uc_db::{store::memory::MemoryLog, AnyPool};
 
-/// Build a test app with in-memory SQLite and AllowingAuthorizer (no-auth mode).
+/// Build a test app over an in-memory log store, with AllowingAuthorizer
+/// (no-auth mode).
 pub async fn build_test_app() -> (Router, AnyPool) {
-    let pool = AnyPool::connect("sqlite::memory:")
+    let pool = AnyPool::open(Arc::new(MemoryLog::new()))
         .await
-        .expect("in-memory sqlite");
-    run_migrations(&pool).await.expect("migrations");
+        .expect("in-memory log store");
 
     let metastore = uc_db::repos::metastore::get_or_init(&pool, "test-metastore")
         .await
         .expect("metastore init");
 
     // Write keys to a temp dir so JWKS endpoint can serve certs.json
-    let config_dir = std::env::temp_dir().join(format!("uc_test_{}", uuid::Uuid::new_v4()));
+    let config_dir = std::env::temp_dir().join(format!("uc_test_{}", uuid::Uuid::now_v7()));
     std::fs::create_dir_all(&config_dir).expect("create config dir");
-    let km = KeyManager::load_or_generate(&config_dir).expect("key gen");
-    let jwt_config =
-        JwtConfig::from_der(&km.private_key_der, &km.public_key_der, km.key_id.clone())
-            .expect("jwt config");
 
     let state = AppState::new(
         pool.clone(),
         Arc::new(AllowingAuthorizer),
         CloudCredentialVendor::new(),
-        jwt_config,
         metastore.id,
         false, // no-auth
         config_dir,
@@ -134,11 +132,14 @@ pub const DELTA: &str = "/delta/v1";
 
 /// Build a test app with auth ENABLED and an optional OIDC config.
 /// Uses AllowingAuthorizer so permission checks always pass.
-pub async fn build_auth_test_app(oidc_config: Option<Arc<OidcConfig>>) -> Router {
-    let pool = AnyPool::connect("sqlite::memory:")
+/// Returns the router alongside the underlying log, so a test can read back
+/// what was actually committed — the actor on each commit, for instance, which
+/// is not visible through the API.
+pub async fn build_auth_test_app(oidc_config: Option<Arc<OidcConfig>>) -> (Router, Arc<MemoryLog>) {
+    let log = Arc::new(MemoryLog::new());
+    let pool = AnyPool::open(log.clone())
         .await
-        .expect("in-memory sqlite");
-    run_migrations(&pool).await.expect("migrations");
+        .expect("in-memory log store");
 
     let metastore = uc_db::repos::metastore::get_or_init(&pool, "auth-test-metastore")
         .await
@@ -146,23 +147,18 @@ pub async fn build_auth_test_app(oidc_config: Option<Arc<OidcConfig>>) -> Router
 
     let config_dir = std::env::temp_dir().join(format!("uc_auth_test_{}", uuid::Uuid::now_v7()));
     std::fs::create_dir_all(&config_dir).expect("create config dir");
-    let km = KeyManager::load_or_generate(&config_dir).expect("key gen");
-    let jwt_config =
-        JwtConfig::from_der(&km.private_key_der, &km.public_key_der, km.key_id.clone())
-            .expect("jwt config");
 
     let state = AppState::new(
         pool,
         Arc::new(AllowingAuthorizer),
         CloudCredentialVendor::new(),
-        jwt_config,
         metastore.id,
         true, // auth enabled
         config_dir,
         oidc_config,
     );
 
-    Router::new()
+    let router = Router::new()
         .merge(catalog_api::router(state.clone()))
         .merge(control_api::router(state.clone()))
         .merge(delta_api::router(state.clone()))
@@ -170,10 +166,26 @@ pub async fn build_auth_test_app(oidc_config: Option<Arc<OidcConfig>>) -> Router
         .layer(axum::middleware::from_fn_with_state(
             state.clone(),
             auth_middleware,
-        ))
+        ));
+    (router, log)
 }
 
 /// Send a GET with an explicit Authorization: Bearer header.
+pub async fn post_bearer(app: &Router, uri: &str, token: &str, body: Value) -> (StatusCode, Value) {
+    let req = Request::builder()
+        .method("POST")
+        .uri(uri)
+        .header(header::CONTENT_TYPE, "application/json")
+        .header(header::AUTHORIZATION, format!("Bearer {token}"))
+        .body(Body::from(serde_json::to_vec(&body).unwrap()))
+        .unwrap();
+    let res = app.clone().oneshot(req).await.unwrap();
+    let status = res.status();
+    let bytes = to_bytes(res.into_body(), usize::MAX).await.unwrap();
+    let json: Value = serde_json::from_slice(&bytes).unwrap_or(Value::Null);
+    (status, json)
+}
+
 pub async fn get_bearer(app: &Router, uri: &str, token: &str) -> (StatusCode, Value) {
     let req = Request::builder()
         .uri(uri)

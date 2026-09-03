@@ -38,7 +38,7 @@ pub async fn create(
         require(&state, user.id, schema.id, Privilege::CreateVolume).await?;
     }
     validate_sql_name(&req.name)?;
-    let id = Uuid::new_v4();
+    let id = Uuid::now_v7();
     let now = now_ms();
     // #1143: MANAGED volumes auto-derive storage_location from storage_root hierarchy
     let storage_location = match req.volume_type {
@@ -102,7 +102,13 @@ pub async fn list(
 ) -> Result<Json<ListVolumesResponseContent>, UcError> {
     let schema =
         schema::get_by_full_name(&state.pool, &params.catalog_name, &params.schema_name).await?;
-    let max = params.max_results.unwrap_or(50).min(1000);
+    // A non-positive max_results means "unspecified", not "an empty page". It
+    // used to reach the repo layer and underflow there.
+    let max = params
+        .max_results
+        .filter(|n| *n > 0)
+        .unwrap_or(50)
+        .min(1000);
     let (rows, next_token) =
         volume::list(&state.pool, schema.id, params.page_token.as_deref(), max).await?;
     // #1105: filter to only volumes the caller can see when auth is enabled
@@ -111,12 +117,12 @@ pub async fn list(
     } else {
         None
     };
-    let visible_ids: std::collections::HashSet<uuid::Uuid> = if state.auth_enabled {
-        crate::catalog_api::helpers::filter_visible(
+    let visible_ids: std::collections::HashSet<Uuid> = if state.auth_enabled {
+        filter_visible(
             &state,
             principal,
             rows.iter().map(|r| (r.id, ())).collect(),
-            uc_types::Privilege::ReadVolume,
+            Privilege::ReadVolume,
         )
         .await?
         .into_iter()

@@ -42,7 +42,7 @@ pub async fn create(
     }
 
     validate_sql_name(&req.name)?;
-    let id = Uuid::new_v4();
+    let id = Uuid::now_v7();
     let now = chrono::Utc::now().timestamp_millis();
     let creator = if state.auth_enabled {
         Some(claims.sub.as_str())
@@ -105,7 +105,13 @@ pub async fn list(
     State(state): State<AppState>,
     Query(params): Query<ListParams>,
 ) -> Result<Json<ListCatalogsResponse>, UcError> {
-    let max = params.max_results.unwrap_or(50).min(1000);
+    // A non-positive max_results means "unspecified", not "an empty page". It
+    // used to reach the repo layer and underflow there.
+    let max = params
+        .max_results
+        .filter(|n| *n > 0)
+        .unwrap_or(50)
+        .min(1000);
     let (rows, next_token) = catalog::list(&state.pool, params.page_token.as_deref(), max).await?;
 
     let catalogs = rows
@@ -288,17 +294,14 @@ pub async fn delete(
 }
 
 /// Delete all children of a schema (tables, volumes, functions, models) without deleting the schema itself.
-async fn delete_schema_children(
-    pool: &uc_db::AnyPool,
-    schema_id: uuid::Uuid,
-) -> Result<(), UcError> {
+async fn delete_schema_children(pool: &uc_db::AnyPool, schema_id: Uuid) -> Result<(), UcError> {
     use uc_db::repos::{function, model, table, volume};
 
     // Delete tables (with columns and properties)
     let (tables, _) = table::list(pool, schema_id, None, 10000).await?;
     for t in tables {
         table::delete_columns(pool, t.id).await?;
-        uc_db::repos::property::delete_for_entity(pool, t.id, "table").await?;
+        property::delete_for_entity(pool, t.id, "table").await?;
         table::delete(pool, t.id).await?;
     }
     // Delete volumes

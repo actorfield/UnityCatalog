@@ -14,7 +14,39 @@ members = [
 [workspace.package]
 license = "Apache-2.0"
 
+# Enforced across every crate rather than left to whoever runs clippy locally.
+# The set is deliberately one that passes clean today: a lint config carrying
+# standing warnings just teaches people to scroll past it.
+[workspace.lints.rust]
+# There is no unsafe in this workspace and no reason for any: forbid rather
+# than deny, so it cannot be re-enabled with a local #[allow].
+unsafe_code = "forbid"
+unused_qualifications = "warn"
+unreachable_pub = "warn"
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }
+# Silent truncation is a bug class this codebase has already been bitten by
+# (a page limit wrapping through usize), so casts are checked rather than
+# trusted.
+cast_possible_truncation = "warn"
+cast_sign_loss = "warn"
+cast_possible_wrap = "warn"
+
+unwrap_used = "warn"
+expect_used = "warn"
+panic = "warn"
+indexing_slicing = "warn"
+
 [workspace.dependencies]
+# OpenTelemetry. Traces are exported over OTLP to a collector; the whole stack
+# is inert unless OTEL_EXPORTER_OTLP_ENDPOINT is set, so a deployment that wants
+# no telemetry pays nothing for it.
+opentelemetry = "0.32"
+opentelemetry_sdk = { version = "0.32", features = ["rt-tokio"] }
+opentelemetry-otlp = { version = "0.32", default-features = false, features = ["trace", "metrics", "logs", "grpc-tonic"] }
+tracing-opentelemetry = "0.33"
+opentelemetry-appender-tracing = "0.32"
 axum = { version = "0.7", features = ["macros"] }
 tower = { version = "0.4", features = ["util"] }
 tower-http = { version = "0.5", features = ["trace", "cors"] }
@@ -22,13 +54,16 @@ tower-http = { version = "0.5", features = ["trace", "cors"] }
 # signal (checked via grep) -- uc-server does use tokio::fs (local_path
 # read/write in main.rs), so that stays. hyper/reqwest/axum will still
 # pull whatever tokio features *they* need transitively regardless.
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "fs"] }
+# "signal" for graceful shutdown: without a SIGTERM handler the default
+# disposition kills the process instantly and in-flight requests are severed.
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "fs", "signal"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sqlx = { version = "0.7", features = ["runtime-tokio-rustls", "uuid", "chrono"] }
 uuid = { version = "1", features = ["v4", "v7", "serde"] }
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
 chrono = { version = "0.4", features = ["serde"] }
+async-trait = "0.1"
 jsonwebtoken = "9"
 casbin = { version = "2", features = ["runtime-tokio"] }
 tracing = "0.1"
@@ -45,7 +80,12 @@ rsa = { version = "0.9", features = ["sha2", "pkcs5"] }
 # Cloud SDK deps (feature-gated in uc-credentials)
 aws-config = { version = "1", default-features = false, features = ["rustls", "rt-tokio"] }
 aws-sdk-sts = { version = "1", default-features = false, features = ["rustls", "rt-tokio"] }
-aws-sdk-s3 = { version = "1", default-features = false, features = ["rustls", "rt-tokio"] }
+# Floored rather than left at "1": the log store's put_if_absent needs
+# PutObject's if_none_match, which older 1.x releases do not expose. Cargo.lock
+# is gitignored here, so a fresh clone resolves whatever is current and nothing
+# else records the requirement. 1.144 is the version this was built and tested
+# against; the true minimum is lower but has not been verified.
+aws-sdk-s3 = { version = "1.144", default-features = false, features = ["rustls", "rt-tokio"] }
 
 [profile.release]
 lto = true

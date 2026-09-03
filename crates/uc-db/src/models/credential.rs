@@ -1,7 +1,7 @@
-use sqlx::FromRow;
+use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-#[derive(Debug, Clone, FromRow)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CredentialRow {
     pub id: Uuid,
     pub name: String,

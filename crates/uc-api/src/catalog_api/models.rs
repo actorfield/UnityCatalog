@@ -39,7 +39,7 @@ pub async fn create_model(
         require(&state, user.id, schema.id, Privilege::CreateModel).await?;
     }
     validate_sql_name(&req.name)?;
-    let id = Uuid::new_v4();
+    let id = Uuid::now_v7();
     let now = now_ms();
     // #1143: auto-derive model storage location from storage_root if not provided
     let model_storage = match req.storage_location {
@@ -102,7 +102,13 @@ pub async fn list_models(
     let cat = params.catalog_name.as_deref().unwrap_or("");
     let sch = params.schema_name.as_deref().unwrap_or("");
     let schema = schema::get_by_full_name(&state.pool, cat, sch).await?;
-    let max = params.max_results.unwrap_or(50).min(1000);
+    // A non-positive max_results means "unspecified", not "an empty page". It
+    // used to reach the repo layer and underflow there.
+    let max = params
+        .max_results
+        .filter(|n| *n > 0)
+        .unwrap_or(50)
+        .min(1000);
     let (rows, next_token) =
         model::list_models(&state.pool, schema.id, params.page_token.as_deref(), max).await?;
     // #1105: filter to only models the caller can see when auth is enabled
@@ -111,12 +117,12 @@ pub async fn list_models(
     } else {
         None
     };
-    let visible_ids: std::collections::HashSet<uuid::Uuid> = if state.auth_enabled {
-        crate::catalog_api::helpers::filter_visible(
+    let visible_ids: std::collections::HashSet<Uuid> = if state.auth_enabled {
+        filter_visible(
             &state,
             principal,
             rows.iter().map(|r| (r.id, ())).collect(),
-            uc_types::Privilege::Select,
+            Privilege::Select,
         )
         .await?
         .into_iter()
@@ -165,17 +171,16 @@ pub async fn update_model(
     if let Some(ref new_name) = req.new_name {
         validate_sql_name(new_name)?;
     }
-    sqlx::query(
-        "UPDATE uc_registered_models SET name=COALESCE($1,name), comment=COALESCE($2,comment), owner=COALESCE($3,owner), updated_at=$4, updated_by=$5 WHERE id=$6"
+    model::update_model(
+        &state.pool,
+        existing.id,
+        req.new_name.as_deref(),
+        req.comment.as_deref(),
+        req.owner.as_deref(),
+        now,
+        auth_sub(&state, &claims),
     )
-    .bind(req.new_name.as_deref())
-    .bind(req.comment.as_deref())
-    .bind(req.owner.as_deref())
-    .bind(now)
-    .bind(auth_sub(&state, &claims))
-    .bind(existing.id)
-    .execute(state.pool.as_ref())
-    .await.map_err(crate::db_err)?;
+    .await?;
     if let Some(ref props) = req.properties {
         property::replace(&state.pool, existing.id, "registered_model", props).await?;
     }
@@ -215,7 +220,7 @@ pub async fn create_version(
     let model =
         model::get_model_by_schema_and_name(&state.pool, schema.id, &req.model_name).await?;
     let next_ver = model.max_version_number.unwrap_or(0) + 1;
-    let id = Uuid::new_v4();
+    let id = Uuid::now_v7();
     let now = now_ms();
     // #1143: derive version storage location from model storage location
     let version_url = model
@@ -239,12 +244,7 @@ pub async fn create_version(
     };
     let created = model::create_version(&state.pool, &row).await?;
     // Update max_version_number on the parent model
-    sqlx::query("UPDATE uc_registered_models SET max_version_number=$1 WHERE id=$2")
-        .bind(next_ver)
-        .bind(model.id)
-        .execute(state.pool.as_ref())
-        .await
-        .map_err(crate::db_err)?;
+    model::set_max_version(&state.pool, model.id, next_ver).await?;
     Ok(Json(to_version_info(
         created,
         &req.catalog_name,
@@ -260,13 +260,7 @@ pub async fn list_versions(
     let (cat, sch, mdl) = split3(&full_name)?;
     let schema = schema::get_by_full_name(&state.pool, cat, sch).await?;
     let model = model::get_model_by_schema_and_name(&state.pool, schema.id, mdl).await?;
-    let rows: Vec<ModelVersionRow> = sqlx::query_as::<_, ModelVersionRow>(
-        "SELECT * FROM uc_model_versions WHERE registered_model_id=$1 ORDER BY version",
-    )
-    .bind(model.id)
-    .fetch_all(state.pool.as_ref())
-    .await
-    .map_err(crate::db_err)?;
+    let rows = model::list_versions(&state.pool, model.id).await?;
     let model_versions = rows
         .into_iter()
         .map(|r| to_version_info(r, cat, sch, mdl))
@@ -309,12 +303,14 @@ pub async fn update_version(
         require(&state, user.id, model.id, Privilege::Owner).await?;
     }
     let now = now_ms();
-    sqlx::query("UPDATE uc_model_versions SET comment=COALESCE($1,comment), updated_at=$2, updated_by=$3 WHERE id=$4")
-        .bind(req.comment.as_deref())
-        .bind(now)
-        .bind(auth_sub(&state, &claims))
-        .bind(row.id)
-        .execute(state.pool.as_ref()).await.map_err(crate::db_err)?;
+    model::update_version(
+        &state.pool,
+        row.id,
+        req.comment.as_deref(),
+        now,
+        auth_sub(&state, &claims),
+    )
+    .await?;
     let updated = model::get_version(&state.pool, model.id, ver).await?;
     Ok(Json(to_version_info(updated, cat, sch, mdl)))
 }
@@ -352,12 +348,7 @@ pub async fn finalize_version(
         ModelVersionStatus::FailedRegistration => "FAILED_REGISTRATION",
         ModelVersionStatus::ModelVersionStatusUnknown => "MODEL_VERSION_STATUS_UNKNOWN",
     };
-    sqlx::query("UPDATE uc_model_versions SET status=$1 WHERE id=$2")
-        .bind(status_str)
-        .bind(row.id)
-        .execute(state.pool.as_ref())
-        .await
-        .map_err(crate::db_err)?;
+    model::set_version_status(&state.pool, row.id, status_str).await?;
     let updated = model::get_version(&state.pool, model.id, ver).await?;
     Ok(Json(to_version_info(updated, cat, sch, mdl)))
 }

@@ -394,6 +394,13 @@ pub struct DeltaReportMetricsRequest {
 
 #[cfg(test)]
 mod tests {
+    // Tests panic on purpose; see the note in the crate-level modules.
+    #![allow(
+        clippy::unwrap_used,
+        clippy::expect_used,
+        clippy::panic,
+        clippy::indexing_slicing
+    )]
     use super::*;
 
     #[test]
@@ -416,7 +423,7 @@ mod tests {
 
     #[test]
     fn delta_requirement_assert_uuid_round_trip() {
-        let uuid = Uuid::new_v4();
+        let uuid = Uuid::now_v7();
         let req = DeltaTableRequirement::AssertTableUuid { uuid };
         let json = serde_json::to_string(&req).unwrap();
         assert!(json.contains(r#""type":"assert-table-uuid""#));

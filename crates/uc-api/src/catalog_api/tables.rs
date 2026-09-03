@@ -98,7 +98,7 @@ pub async fn create(
                     &req.schema_name,
                 )
                 .await?;
-                let new_id = Uuid::new_v4();
+                let new_id = Uuid::now_v7();
                 let loc = managed_storage::managed_table_location(&root, schema.id, new_id);
                 (new_id, loc)
             };
@@ -107,11 +107,14 @@ pub async fn create(
         }
         _ => {
             // EXTERNAL / VIEW — use provided storage_location as-is
-            (Uuid::new_v4(), req.storage_location.clone())
+            (Uuid::now_v7(), req.storage_location.clone())
         }
     };
 
-    let col_count = req.columns.as_ref().map(|c| c.len() as i32);
+    let col_count = req
+        .columns
+        .as_ref()
+        .map(|c| i32::try_from(c.len()).unwrap_or(i32::MAX));
     let row = TableRow {
         id,
         schema_id: schema.id,
@@ -141,10 +144,10 @@ pub async fn create(
             .iter()
             .enumerate()
             .map(|(i, c)| ColumnRow {
-                id: Uuid::new_v4(),
+                id: Uuid::now_v7(),
                 table_id: id,
                 name: c.name.clone(),
-                ordinal_position: i as i32,
+                ordinal_position: i32::try_from(i).unwrap_or(i32::MAX),
                 type_text: c.type_text.clone().unwrap_or_default(),
                 // #1053: derive type_json from type_text if absent
                 type_json: c.type_json.clone().unwrap_or_else(|| {
@@ -200,7 +203,13 @@ pub async fn list(
 ) -> Result<Json<ListTablesResponse>, UcError> {
     let schema =
         schema::get_by_full_name(&state.pool, &params.catalog_name, &params.schema_name).await?;
-    let max = params.max_results.unwrap_or(50).min(1000);
+    // A non-positive max_results means "unspecified", not "an empty page". It
+    // used to reach the repo layer and underflow there.
+    let max = params
+        .max_results
+        .filter(|n| *n > 0)
+        .unwrap_or(50)
+        .min(1000);
     let (rows, next_token) =
         table::list(&state.pool, schema.id, params.page_token.as_deref(), max).await?;
     // #1105: filter to only tables the caller can see when auth is enabled
@@ -209,12 +218,12 @@ pub async fn list(
     } else {
         None
     };
-    let visible_ids: std::collections::HashSet<uuid::Uuid> = if state.auth_enabled {
-        crate::catalog_api::helpers::filter_visible(
+    let visible_ids: std::collections::HashSet<Uuid> = if state.auth_enabled {
+        filter_visible(
             &state,
             principal,
             rows.iter().map(|r| (r.id, ())).collect(),
-            uc_types::Privilege::Select,
+            Privilege::Select,
         )
         .await?
         .into_iter()

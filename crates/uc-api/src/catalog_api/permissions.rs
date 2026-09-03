@@ -15,7 +15,7 @@ use uuid::Uuid;
 /// by resolving UUIDs back to email strings. Falls back to UUID string if user not found.
 async fn grants_to_assignments(
     pool: &uc_db::AnyPool,
-    grants: Vec<(uuid::Uuid, Vec<Privilege>)>,
+    grants: Vec<(Uuid, Vec<Privilege>)>,
 ) -> Result<Vec<PrivilegeAssignment>, UcError> {
     let mut result = Vec::new();
     for (principal_id, privs) in grants {

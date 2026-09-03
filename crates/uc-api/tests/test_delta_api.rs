@@ -1,3 +1,12 @@
+// Tests panic on purpose: unwrap/expect/indexing are the idiom for
+// asserting, and a failed assertion should abort the test.
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::indexing_slicing
+)]
+
 mod common;
 use axum::http::StatusCode;
 use common::*;
@@ -139,7 +148,7 @@ async fn delta_assert_table_uuid_mismatch_returns_409() {
     )
     .await;
 
-    let wrong_uuid = uuid::Uuid::new_v4().to_string();
+    let wrong_uuid = uuid::Uuid::now_v7().to_string();
     let (s, _) = post(
         &app,
         &delta_tables("req_t"),

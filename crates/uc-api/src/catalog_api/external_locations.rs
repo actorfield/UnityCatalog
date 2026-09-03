@@ -47,12 +47,12 @@ pub async fn create(
                 &state,
                 user_val.id,
                 cred.id,
-                uc_types::Privilege::CreateExternalLocation,
+                Privilege::CreateExternalLocation,
             )
             .await?;
         }
     }
-    let id = Uuid::new_v4();
+    let id = Uuid::now_v7();
     let row = ExternalLocationRow {
         id,
         name: req.name.clone(),
@@ -81,12 +81,18 @@ pub async fn list(
     State(state): State<AppState>,
     Query(params): Query<ListParams>,
 ) -> Result<Json<ListExternalLocationsResponse>, UcError> {
-    let max = params.max_results.unwrap_or(50).min(1000);
+    // A non-positive max_results means "unspecified", not "an empty page". It
+    // used to reach the repo layer and underflow there.
+    let max = params
+        .max_results
+        .filter(|n| *n > 0)
+        .unwrap_or(50)
+        .min(1000);
     let (rows, next_token) =
         external_location::list(&state.pool, params.page_token.as_deref(), max).await?;
     let mut external_locations = Vec::with_capacity(rows.len());
     for r in rows {
-        let cred_name = uc_db::repos::credential::get_by_id(&state.pool, r.credential_id)
+        let cred_name = credential::get_by_id(&state.pool, r.credential_id)
             .await
             .map(|c| c.name)
             .unwrap_or_default();
@@ -103,7 +109,7 @@ pub async fn get(
     Path(name): Path<String>,
 ) -> Result<Json<ExternalLocationInfo>, UcError> {
     let row = external_location::get_by_name(&state.pool, &name).await?;
-    let cred = uc_db::repos::credential::get_by_id(&state.pool, row.credential_id).await?;
+    let cred = credential::get_by_id(&state.pool, row.credential_id).await?;
     Ok(Json(to_ext_loc_info(row, &cred.name)))
 }
 
@@ -116,35 +122,31 @@ pub async fn update(
     let existing = external_location::get_by_name(&state.pool, &name).await?;
     if state.auth_enabled {
         let user = get_user(&state, &claims.sub).await?;
-        require(&state, user.id, existing.id, uc_types::Privilege::Owner).await?;
+        require(&state, user.id, existing.id, Privilege::Owner).await?;
     }
     let effective_name = req.new_name.as_deref().unwrap_or(&name);
     let now = now_ms();
     // Resolve new credential_id if credential_name is being changed
     let new_cred_id = if let Some(ref cred_name) = req.credential_name {
-        Some(
-            uc_db::repos::credential::get_by_name(&state.pool, cred_name)
-                .await?
-                .id,
-        )
+        Some(credential::get_by_name(&state.pool, cred_name).await?.id)
     } else {
         None
     };
-    sqlx::query(
-        "UPDATE uc_external_locations SET name=COALESCE($1,name), url=COALESCE($2,url), comment=COALESCE($3,comment), owner=COALESCE($4,owner), credential_id=COALESCE($5,credential_id), updated_at=$6, updated_by=$7 WHERE id=$8"
+    external_location::update(
+        &state.pool,
+        existing.id,
+        req.new_name.as_deref(),
+        req.url.as_deref(),
+        req.comment.as_deref(),
+        req.owner.as_deref(),
+        new_cred_id,
+        now,
+        auth_sub(&state, &claims),
     )
-    .bind(req.new_name.as_deref())
-    .bind(req.url.as_deref())
-    .bind(req.comment.as_deref())
-    .bind(req.owner.as_deref())
-    .bind(new_cred_id)
-    .bind(now)
-    .bind(auth_sub(&state, &claims))
-    .bind(existing.id)
-    .execute(state.pool.as_ref()).await.map_err(crate::db_err)?;
+    .await?;
     let updated = external_location::get_by_name(&state.pool, effective_name).await?;
     // Get credential name for response
-    let cred = uc_db::repos::credential::get_by_id(&state.pool, updated.credential_id).await?;
+    let cred = credential::get_by_id(&state.pool, updated.credential_id).await?;
     Ok(Json(to_ext_loc_info(updated, &cred.name)))
 }
 

@@ -36,7 +36,7 @@ pub async fn create(
         )
         .await?;
     }
-    let id = Uuid::new_v4();
+    let id = Uuid::now_v7();
     let now = now_ms();
     let credential_json = serde_json::to_string(&req.aws_iam_role).unwrap_or_default();
     let row = CredentialRow {
@@ -79,7 +79,13 @@ pub async fn list(
         )
         .await?;
     }
-    let max = params.max_results.unwrap_or(50).min(1000);
+    // A non-positive max_results means "unspecified", not "an empty page". It
+    // used to reach the repo layer and underflow there.
+    let max = params
+        .max_results
+        .filter(|n| *n > 0)
+        .unwrap_or(50)
+        .min(1000);
     let (rows, next_token) =
         credential::list(&state.pool, params.page_token.as_deref(), max).await?;
     let credentials = rows.into_iter().map(to_cred_info).collect();
@@ -117,7 +123,7 @@ pub async fn update(
     let existing = credential::get_by_name(&state.pool, &name).await?;
     if state.auth_enabled {
         let user = get_user(&state, &claims.sub).await?;
-        require(&state, user.id, existing.id, uc_types::Privilege::Owner).await?;
+        require(&state, user.id, existing.id, Privilege::Owner).await?;
     }
     let effective_name = req.new_name.as_deref().unwrap_or(&name);
     let now = now_ms();
@@ -125,17 +131,17 @@ pub async fn update(
         .aws_iam_role
         .as_ref()
         .map(|r| serde_json::to_string(r).unwrap_or_default());
-    sqlx::query(
-        "UPDATE uc_credentials SET name=COALESCE($1,name), comment=COALESCE($2,comment), owner=COALESCE($3,owner), credential=COALESCE($4,credential), updated_at=$5, updated_by=$6 WHERE id=$7"
+    credential::update(
+        &state.pool,
+        existing.id,
+        req.new_name.as_deref(),
+        req.comment.as_deref(),
+        req.owner.as_deref(),
+        new_credential_json.as_deref(),
+        now,
+        auth_sub(&state, &claims),
     )
-    .bind(req.new_name.as_deref())
-    .bind(req.comment.as_deref())
-    .bind(req.owner.as_deref())
-    .bind(new_credential_json.as_deref())
-    .bind(now)
-    .bind(auth_sub(&state, &claims))
-    .bind(existing.id)
-    .execute(state.pool.as_ref()).await.map_err(crate::db_err)?;
+    .await?;
     let updated = credential::get_by_name(&state.pool, effective_name).await?;
     Ok(Json(to_cred_info(updated)))
 }

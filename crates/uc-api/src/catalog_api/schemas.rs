@@ -31,7 +31,7 @@ pub async fn create(
         require(&state, user.id, catalog.id, Privilege::CreateSchema).await?;
     }
     validate_sql_name(&req.name)?;
-    let id = Uuid::new_v4();
+    let id = Uuid::now_v7();
     let now = chrono::Utc::now().timestamp_millis();
     let row = schema::create(
         &state.pool,
@@ -69,7 +69,13 @@ pub async fn list(
     Query(params): Query<ListParams>,
 ) -> Result<Json<ListSchemasResponse>, UcError> {
     let catalog = catalog::get_by_name(&state.pool, &params.catalog_name).await?;
-    let max = params.max_results.unwrap_or(50).min(1000);
+    // A non-positive max_results means "unspecified", not "an empty page". It
+    // used to reach the repo layer and underflow there.
+    let max = params
+        .max_results
+        .filter(|n| *n > 0)
+        .unwrap_or(50)
+        .min(1000);
     let (rows, next_token) =
         schema::list(&state.pool, catalog.id, params.page_token.as_deref(), max).await?;
     // #1105: filter to only schemas the caller can see
@@ -78,12 +84,12 @@ pub async fn list(
     } else {
         None
     };
-    let visible_ids: std::collections::HashSet<uuid::Uuid> = if state.auth_enabled {
+    let visible_ids: std::collections::HashSet<Uuid> = if state.auth_enabled {
         filter_visible(
             &state,
             principal,
             rows.iter().map(|r| (r.id, ())).collect(),
-            uc_types::Privilege::UseSchema,
+            Privilege::UseSchema,
         )
         .await?
         .into_iter()

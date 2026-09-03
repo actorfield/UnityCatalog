@@ -104,11 +104,18 @@ pub fn staging_table_location(storage_root: &str, schema_id: Uuid, staging_id: U
 
 #[cfg(test)]
 mod tests {
+    // Tests panic on purpose; see the note in the crate-level modules.
+    #![allow(
+        clippy::unwrap_used,
+        clippy::expect_used,
+        clippy::panic,
+        clippy::indexing_slicing
+    )]
     use super::*;
 
     fn fake_catalog(storage_root: Option<&str>) -> CatalogRow {
         CatalogRow {
-            id: Uuid::new_v4(),
+            id: Uuid::now_v7(),
             name: "cat".into(),
             comment: None,
             owner: None,
@@ -123,8 +130,8 @@ mod tests {
 
     fn fake_schema(storage_root: Option<&str>) -> SchemaRow {
         SchemaRow {
-            id: Uuid::new_v4(),
-            catalog_id: Uuid::new_v4(),
+            id: Uuid::now_v7(),
+            catalog_id: Uuid::now_v7(),
             name: "sch".into(),
             comment: None,
             owner: None,

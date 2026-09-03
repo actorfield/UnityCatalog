@@ -1,7 +1,7 @@
-use sqlx::FromRow;
+use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-#[derive(Debug, Clone, FromRow)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StagingTableRow {
     pub id: Uuid,
     pub schema_id: Uuid,
