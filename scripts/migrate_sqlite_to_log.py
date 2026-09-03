@@ -42,7 +42,6 @@ KINDS = {
     "uc_credentials": "credential",
     "uc_external_locations": "external_location",
     "uc_properties": "property",
-    "uc_dependencies": "dependency",
 }
 
 # INTEGER 0/1 in SQLite, bool in the Rust structs. Anything not listed stays a
@@ -63,9 +62,15 @@ BOOLS = {
 KIND_ORDER = [
     "metastore", "catalog", "schema", "table", "column", "volume", "function",
     "function_parameter", "registered_model", "model_version", "staging_table",
-    "delta_commit", "user", "credential", "external_location", "property",
-    "dependency", "casbin_rule",
+    "user", "credential", "external_location", "property", "casbin_rule",
 ]
+
+# Tables with no EntityKind, so nothing in the checkpoint can come from them.
+# uc_dependencies and uc_delta_commits both carried a variant that was dropped
+# once nothing wrote to them; uc_delta_commits still migrates, but as per-table
+# partition objects rather than snapshot entities (see below). Listing them
+# here so a stray row reports itself instead of being silently skipped.
+UNMIGRATED = {"uc_dependencies"}
 
 
 def fnv1a64(data: bytes) -> str:
@@ -127,6 +132,15 @@ def main():
     existing = {
         r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")
     }
+
+    for table in sorted(UNMIGRATED & existing):
+        n = conn.execute(f"SELECT count(*) FROM {table}").fetchone()[0]
+        if n:
+            sys.exit(
+                f"{table} has {n} rows and no EntityKind to migrate them into. "
+                "The variant was removed as dead; if this table is live again, "
+                "the store has to grow the variant back first."
+            )
 
     # ── collect every snapshot entity ────────────────────────────────────────
     entities = {}  # kind -> {id: body}
