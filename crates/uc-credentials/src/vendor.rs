@@ -121,18 +121,23 @@ fn make_cache_key(ctx: &CredentialContext) -> String {
     format!("{}::{}::{:?}", role, locs.join(","), ctx.operation)
 }
 
-/// Parse expiry from the credential's expiration field (RFC3339 string).
+/// Parse expiry from the credential: the AWS `expiration` (RFC3339 string) if
+/// present, else the spec's top-level `expiration_time` (epoch milliseconds).
 /// Returns a Duration from now to (expiry - buffer).
 fn parse_expiry_ttl(creds: &TemporaryCredentials) -> Option<Duration> {
-    let exp_str = creds
+    let exp_ms = match creds
         .aws_temp_credentials
         .as_ref()
         .and_then(|a| a.expiration.as_deref())
-        .or(creds.expiration_time.as_deref())?;
+    {
+        Some(s) => chrono::DateTime::parse_from_rfc3339(s)
+            .ok()?
+            .timestamp_millis(),
+        None => creds.expiration_time?,
+    };
 
-    let exp = chrono::DateTime::parse_from_rfc3339(exp_str).ok()?;
-    let now = chrono::Utc::now();
-    let secs_until_exp = (exp.with_timezone(&chrono::Utc) - now).num_seconds();
+    let now_ms = chrono::Utc::now().timestamp_millis();
+    let secs_until_exp = exp_ms.saturating_sub(now_ms) / 1000;
     // Compare unsigned-to-unsigned: a negative remaining lifetime (already
     // expired, or a clock skewed backwards) must not wrap into a huge cache TTL
     // for a credential that is no longer valid.
@@ -198,6 +203,12 @@ impl AwsCredentialVendor {
         let secret_access_key = creds.secret_access_key().to_string();
         let session_token = creds.session_token().to_string();
         let expiration = creds.expiration().to_string();
+        // The spec's top-level expiration_time (epoch ms) is what clients renew
+        // on; `expiration` above is this server's own RFC3339 extra. Both come
+        // from the same STS timestamp. Because this vendor caches credentials,
+        // a client may be handed one that is already part-way through its
+        // lifetime -- the real expiry is what lets it renew in time.
+        let expiration_time = creds.expiration().to_millis().ok();
 
         // Presign a native S3 URL for the requested location using the
         // just-assumed temporary credentials — additive to aws_temp_credentials.
@@ -217,6 +228,7 @@ impl AwsCredentialVendor {
                 session_token,
                 expiration: Some(expiration),
             }),
+            expiration_time,
             url: presigned_url,
             ..Default::default()
         })
@@ -566,7 +578,7 @@ mod tests {
 
         let future = chrono::Utc::now() + chrono::Duration::minutes(30);
         let creds = TemporaryCredentials {
-            expiration_time: Some(future.to_rfc3339()),
+            expiration_time: Some(future.timestamp_millis()),
             ..Default::default()
         };
         let ttl = parse_expiry_ttl(&creds);
