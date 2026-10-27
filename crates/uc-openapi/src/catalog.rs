@@ -800,8 +800,14 @@ pub struct TemporaryCredentials {
     pub azure_user_delegation_sas: Option<AzureUserDelegationSas>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub gcp_oauth_token: Option<GcpOauthToken>,
+    /// When the credential expires, in epoch MILLISECONDS -- an integer, per the
+    /// Unity Catalog spec ("The API client is advised to cache the credential
+    /// given this expiration time"). Clients key renewal off it: the UC Spark
+    /// connector only renews a credential whose expiration_time is set, so
+    /// omitting it makes the connector cache the credential until S3 rejects it
+    /// with ExpiredToken. It was typed as a string and never populated.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub expiration_time: Option<String>,
+    pub expiration_time: Option<i64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub url: Option<String>,
 }

@@ -39,7 +39,7 @@ pub async fn get_table_credentials(
                 "awsSecretKey": aws.secret_access_key,
                 "awsSessionToken": aws.session_token,
             })),
-            expiration_time_ms: None,
+            expiration_time_ms: creds.expiration_time,
         }]
     } else {
         vec![]
@@ -77,7 +77,7 @@ pub async fn get_staging_credentials(
                 "awsSecretKey": aws.secret_access_key,
                 "awsSessionToken": aws.session_token,
             })),
-            expiration_time_ms: None,
+            expiration_time_ms: creds.expiration_time,
         }]
     } else {
         vec![]
@@ -118,7 +118,7 @@ pub async fn get_path_credentials(
                 "awsSecretKey": aws.secret_access_key,
                 "awsSessionToken": aws.session_token,
             })),
-            expiration_time_ms: None,
+            expiration_time_ms: creds.expiration_time,
         }]
     } else {
         vec![]
