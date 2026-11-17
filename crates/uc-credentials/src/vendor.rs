@@ -182,10 +182,22 @@ impl AwsCredentialVendor {
             )
         })?;
 
+        // Without a session policy the credentials carried the role's every
+        // right: any key in the bucket, and writes for a read. Fail closed on
+        // a location this cannot scope rather than hand those out.
+        let policy = session_policy(&ctx.locations, is_write_operation(&ctx.operation))
+            .ok_or_else(|| {
+                UcError::new(
+                    ErrorCode::InvalidArgument,
+                    "No S3 location to scope the credentials to",
+                )
+            })?;
+
         let mut req = sts_client
             .assume_role()
             .role_arn(role_arn)
-            .role_session_name("unity-catalog");
+            .role_session_name("unity-catalog")
+            .policy(policy);
 
         if let Some(ref ext_id) = ctx.external_id {
             req = req.external_id(ext_id);
@@ -239,6 +251,55 @@ impl AwsCredentialVendor {
 /// Pure mapping, no AWS calls — kept separate so it's cheaply unit-testable.
 fn is_write_operation(op: &crate::context::CredentialOperation) -> bool {
     matches!(op, crate::context::CredentialOperation::ReadWrite)
+}
+
+/// The STS session policy for `locations`: objects under each location's
+/// top-level prefix (`s3://bucket/<prefix>/...`), read-only unless `write`.
+///
+/// The top-level prefix, not the location itself: one catalog's tables and
+/// files all sit under it, and callers use the credentials vended for one of
+/// its paths on a sibling. The role's own policy still bounds everything; a
+/// session policy can only narrow it. `None` when no location is S3-shaped
+/// with a prefix to scope to.
+fn session_policy(locations: &[String], write: bool) -> Option<String> {
+    let mut scopes: Vec<(&str, &str)> = locations
+        .iter()
+        .filter_map(|l| {
+            let (bucket, key) = split_s3_url(l)?;
+            let prefix = key.split('/').next().filter(|p| !p.is_empty())?;
+            Some((bucket, prefix))
+        })
+        .collect();
+    if scopes.is_empty() {
+        return None;
+    }
+    scopes.sort_unstable();
+    scopes.dedup();
+
+    let mut object_actions = vec!["s3:GetObject"];
+    if write {
+        object_actions.extend([
+            "s3:PutObject",
+            "s3:DeleteObject",
+            "s3:AbortMultipartUpload",
+            "s3:ListMultipartUploadParts",
+        ]);
+    }
+    let mut statements = Vec::new();
+    for (bucket, prefix) in scopes {
+        statements.push(serde_json::json!({
+            "Effect": "Allow",
+            "Action": object_actions,
+            "Resource": format!("arn:aws:s3:::{bucket}/{prefix}/*"),
+        }));
+        statements.push(serde_json::json!({
+            "Effect": "Allow",
+            "Action": ["s3:ListBucket"],
+            "Resource": format!("arn:aws:s3:::{bucket}"),
+            "Condition": { "StringLike": { "s3:prefix": [prefix, format!("{prefix}/*")] } },
+        }));
+    }
+    Some(serde_json::json!({ "Version": "2012-10-17", "Statement": statements }).to_string())
 }
 
 /// Split an `s3://bucket/key...` URL into (bucket, key). Returns `None` if the
@@ -348,6 +409,54 @@ mod tests {
             role_arn: None,
             external_id: None,
         }
+    }
+
+    fn policy(locations: &[&str], write: bool) -> serde_json::Value {
+        let l: Vec<String> = locations.iter().map(|s| s.to_string()).collect();
+        serde_json::from_str(&session_policy(&l, write).unwrap()).unwrap()
+    }
+
+    #[test]
+    fn a_read_is_scoped_to_the_locations_top_level_prefix_and_reads_only() {
+        let p = policy(&["s3://bkt/acme-inc/schemas/s1/tables/t1"], false);
+        let st = p["Statement"].as_array().unwrap();
+        assert_eq!(st[0]["Resource"], "arn:aws:s3:::bkt/acme-inc/*");
+        assert_eq!(st[0]["Action"], serde_json::json!(["s3:GetObject"]));
+        assert_eq!(st[1]["Resource"], "arn:aws:s3:::bkt");
+        assert_eq!(
+            st[1]["Condition"]["StringLike"]["s3:prefix"],
+            serde_json::json!(["acme-inc", "acme-inc/*"])
+        );
+    }
+
+    #[test]
+    fn a_write_adds_put_and_delete_and_nothing_wider() {
+        let p = policy(&["s3://bkt/acme-inc/p1/uploads/x"], true);
+        let actions = p["Statement"][0]["Action"].as_array().unwrap();
+        assert!(actions.contains(&serde_json::json!("s3:PutObject")));
+        assert!(actions.contains(&serde_json::json!("s3:DeleteObject")));
+        assert_eq!(p["Statement"][0]["Resource"], "arn:aws:s3:::bkt/acme-inc/*");
+    }
+
+    #[test]
+    fn each_prefix_is_listed_once() {
+        let p = policy(&["s3://bkt/a/x", "s3://bkt/a/y", "s3://bkt/b/z"], false);
+        assert_eq!(
+            p["Statement"].as_array().unwrap().len(),
+            4,
+            "two prefixes, two statements each"
+        );
+    }
+
+    #[test]
+    fn nothing_to_scope_to_is_none() {
+        assert!(session_policy(&[], false).is_none());
+        assert!(
+            session_policy(&["s3://bkt".into()], false).is_none(),
+            "a bare bucket"
+        );
+        assert!(session_policy(&["s3://bkt/".into()], false).is_none());
+        assert!(session_policy(&["file:///tmp/x".into()], false).is_none());
     }
 
     #[tokio::test]
